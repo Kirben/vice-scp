@@ -36,6 +36,8 @@
 #include "gcr.h"
 #include "fsimage-gcr.h"
 #include "fsimage-p64.h"
+#include "fsimage-scp.h"
+#include "scp-reader.h"
 #include "fsimage-probe.h"
 #include "fsimage.h"
 #include "lib.h"
@@ -799,8 +801,20 @@ static int disk_image_check_for_d90(disk_image_t *image)
 */
 int fsimage_probe(disk_image_t *image)
 {
+    int scp_result;
     image->type = DISK_IMAGE_TYPE_UNKNOWN;
 
+    /* Signature-based flux recognition must precede all size-based probes.
+       Explicit comparisons: negative errors are not successful recognition. */
+    scp_result = fsimage_scp_read(image);
+    if (scp_result == FLUX_OK) {
+        disk_image_check_log(image, "SCP");
+        return 0;
+    }
+    if (scp_result != SCP_FILE_NOT_MATCHED) {
+        log_error(disk_image_probe_log, "Invalid or unsupported SCP image (%d).", scp_result);
+        return -1;
+    }
     if (disk_image_check_for_d64(image)) {
         return 0;
     }

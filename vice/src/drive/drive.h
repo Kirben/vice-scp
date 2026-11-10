@@ -249,6 +249,7 @@ typedef struct drive_type_info_s {
 
 struct gcr_s;
 struct disk_image_s;
+struct rotation_flux_s;
 
 typedef struct drive_s {
     unsigned int drive; /* DRIVE_NUMBER_MIN ... DRIVE_NUMBER_MAX */
@@ -385,6 +386,9 @@ typedef struct drive_s {
     int wobble_frequency;   /* from the resource */
     int wobble_amplitude;   /* from the resource */
     int true_emulation;     /* from the resource */
+
+    /* Owned native input context; borrows the attached image's capture. */
+    struct rotation_flux_s *flux;
 
 } drive_t;
 

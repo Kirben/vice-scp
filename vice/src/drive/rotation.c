@@ -33,7 +33,10 @@
 #include "drive.h"
 #include "drivetypes.h"
 #include "lib.h"
+#include "log.h"
 #include "rotation.h"
+#include "rotation-flux.h"
+#include "../diskimage/flux-logic.h"
 #include "types.h"
 #include "p64.h"
 
@@ -49,28 +52,16 @@ struct rotation_s {
     uint32_t accum;
     CLOCK rotation_last_clk;
 
-    unsigned int last_read_data;
-    uint8_t last_write_data;
-    int bit_counter;
     int zero_count;
 
     int frequency; /* 1x/2x speed toggle, index to rot_speed_bps */
     int speed_zone; /* speed zone within rot_speed_bps */
 
-    int ue7_dcba; /* UE7 input BA, counter b1/b0, connected to UCD4 PB6/PB5, DC=0 */
-    int ue7_counter; /* UE7 4 bit counter state */
-    int uf4_counter; /* UF4 4 bit counter state */
-    uint32_t fr_randcount; /* counter distance of the last real flux reversal detected from the disk */
 
-    int filter_counter; /* flux filter ignore cycle count */
-    int filter_state; /* flux filter current state */
-    int filter_last_state; /* flux filter last state */
 
     int write_flux; /* write flux bit state */
 
-    int so_delay; /* so signal delay */
 
-    uint32_t cycle_index; /* cycle_index */
 
     CLOCK ref_advance; /* reference cycles already simulated, e.g. when emulating bus delay */
 
@@ -78,7 +69,7 @@ struct rotation_s {
 
     uint32_t seed;
 
-    uint32_t xorShift32;
+    flux_logic_t logic;
 };
 typedef struct rotation_s rotation_t;
 
@@ -94,17 +85,17 @@ void rotation_init(int freq, unsigned int dnr)
 {
     rotation[dnr].frequency = freq;
     rotation[dnr].accum = 0;
-    rotation[dnr].ue7_counter = 0;
-    rotation[dnr].uf4_counter = 0;
-    rotation[dnr].fr_randcount = 0;
-    rotation[dnr].xorShift32 = 0x1234abcd;
-    rotation[dnr].filter_counter = 0;
-    rotation[dnr].filter_state = 0;
-    rotation[dnr].filter_last_state = 0;
+    rotation[dnr].logic.ue7_counter = 0;
+    rotation[dnr].logic.uf4_counter = 0;
+    rotation[dnr].logic.fr_randcount = 0;
+    rotation[dnr].logic.xorShift32 = 0x1234abcd;
+    rotation[dnr].logic.filter_counter = 0;
+    rotation[dnr].logic.filter_state = 0;
+    rotation[dnr].logic.filter_last_state = 0;
     rotation[dnr].write_flux = 0;
     rotation[dnr].PulseHeadPosition = 0;
-    rotation[dnr].so_delay = 0;
-    rotation[dnr].cycle_index = 0;
+    rotation[dnr].logic.so_delay = 0;
+    rotation[dnr].logic.cycle_index = 0;
     rotation[dnr].ref_advance = 0;
 }
 
@@ -114,32 +105,37 @@ void rotation_reset(drive_t *drive)
 
     dnr = drive->diskunit->mynumber;
 
-    rotation[dnr].last_read_data = 0;
-    rotation[dnr].last_write_data = 0;
-    rotation[dnr].bit_counter = 0;
+    rotation[dnr].logic.last_read_data = 0;
+    rotation[dnr].logic.last_write_data = 0;
+    rotation[dnr].logic.bit_counter = 0;
     rotation[dnr].accum = 0;
     rotation[dnr].seed = 0;
-    rotation[dnr].xorShift32 = 0x1234abcd;
+    rotation[dnr].logic.xorShift32 = 0x1234abcd;
     rotation[dnr].rotation_last_clk = *(drive->diskunit->clk_ptr);
-    rotation[dnr].ue7_counter = 0;
-    rotation[dnr].uf4_counter = 0;
-    rotation[dnr].fr_randcount = 0;
-    rotation[dnr].filter_counter = 0;
-    rotation[dnr].filter_state = 0;
-    rotation[dnr].filter_last_state = 0;
+    rotation[dnr].logic.ue7_counter = 0;
+    rotation[dnr].logic.uf4_counter = 0;
+    rotation[dnr].logic.fr_randcount = 0;
+    rotation[dnr].logic.filter_counter = 0;
+    rotation[dnr].logic.filter_state = 0;
+    rotation[dnr].logic.filter_last_state = 0;
     rotation[dnr].write_flux = 0;
     rotation[dnr].PulseHeadPosition = 0;
-    rotation[dnr].so_delay = 0;
-    rotation[dnr].cycle_index = 0;
+    rotation[dnr].logic.so_delay = 0;
+    rotation[dnr].logic.cycle_index = 0;
     rotation[dnr].ref_advance = 0;
 
     drive->req_ref_cycles = 0;
+    if (drive->flux != NULL) {
+        drive->flux->reference_phase = 0;
+        flux_playback_set_motor(&drive->flux->playback,
+                                drive->byte_ready_active & BRA_MOTOR_ON);
+    }
 }
 
 void rotation_speed_zone_set(unsigned int zone, unsigned int dnr)
 {
     rotation[dnr].speed_zone = zone;
-    rotation[dnr].ue7_dcba = zone & 3;
+    rotation[dnr].logic.ue7_dcba = zone & 3;
 }
 
 void rotation_table_get(uint32_t *rotation_table_ptr)
@@ -157,24 +153,24 @@ void rotation_table_get(uint32_t *rotation_table_ptr)
 
         drive->snap_accum = (uint32_t)(rotation[dnr].accum);
         drive->snap_rotation_last_clk = rotation[dnr].rotation_last_clk;
-        drive->snap_last_read_data = rotation[dnr].last_read_data;
-        drive->snap_last_write_data = rotation[dnr].last_write_data;
-        drive->snap_bit_counter = rotation[dnr].bit_counter;
+        drive->snap_last_read_data = rotation[dnr].logic.last_read_data;
+        drive->snap_last_write_data = rotation[dnr].logic.last_write_data;
+        drive->snap_bit_counter = rotation[dnr].logic.bit_counter;
         drive->snap_zero_count = rotation[dnr].zero_count;
         drive->snap_seed = rotation[dnr].seed;
         drive->snap_speed_zone = rotation[dnr].speed_zone;
-        drive->snap_ue7_dcba = rotation[dnr].ue7_dcba;
-        drive->snap_ue7_counter = rotation[dnr].ue7_counter;
-        drive->snap_uf4_counter = rotation[dnr].uf4_counter;
-        drive->snap_fr_randcount = rotation[dnr].fr_randcount;
-        drive->snap_filter_counter = rotation[dnr].filter_counter;
-        drive->snap_filter_state = rotation[dnr].filter_state;
-        drive->snap_filter_last_state = rotation[dnr].filter_last_state;
+        drive->snap_ue7_dcba = rotation[dnr].logic.ue7_dcba;
+        drive->snap_ue7_counter = rotation[dnr].logic.ue7_counter;
+        drive->snap_uf4_counter = rotation[dnr].logic.uf4_counter;
+        drive->snap_fr_randcount = rotation[dnr].logic.fr_randcount;
+        drive->snap_filter_counter = rotation[dnr].logic.filter_counter;
+        drive->snap_filter_state = rotation[dnr].logic.filter_state;
+        drive->snap_filter_last_state = rotation[dnr].logic.filter_last_state;
         drive->snap_write_flux = rotation[dnr].write_flux;
         drive->snap_PulseHeadPosition = rotation[dnr].PulseHeadPosition;
-        drive->snap_xorShift32 = rotation[dnr].xorShift32;
-        drive->snap_so_delay = rotation[dnr].so_delay;
-        drive->snap_cycle_index = rotation[dnr].cycle_index;
+        drive->snap_xorShift32 = rotation[dnr].logic.xorShift32;
+        drive->snap_so_delay = rotation[dnr].logic.so_delay;
+        drive->snap_cycle_index = rotation[dnr].logic.cycle_index;
         drive->snap_ref_advance = rotation[dnr].ref_advance;
         drive->snap_req_ref_cycles = drive->req_ref_cycles;
       }
@@ -195,24 +191,24 @@ void rotation_table_set(uint32_t *rotation_table_ptr)
 
         rotation[dnr].accum = (uint32_t)(drive->snap_accum);
         rotation[dnr].rotation_last_clk = drive->snap_rotation_last_clk;
-        rotation[dnr].last_read_data = drive->snap_last_read_data;
-        rotation[dnr].last_write_data = drive->snap_last_write_data;
-        rotation[dnr].bit_counter = drive->snap_bit_counter;
+        rotation[dnr].logic.last_read_data = drive->snap_last_read_data;
+        rotation[dnr].logic.last_write_data = drive->snap_last_write_data;
+        rotation[dnr].logic.bit_counter = drive->snap_bit_counter;
         rotation[dnr].zero_count = drive->snap_zero_count;
         rotation[dnr].seed = drive->snap_seed;
         rotation[dnr].speed_zone = drive->snap_speed_zone;
-        rotation[dnr].ue7_dcba = drive->snap_ue7_dcba;
-        rotation[dnr].ue7_counter = drive->snap_ue7_counter;
-        rotation[dnr].uf4_counter = drive->snap_uf4_counter;
-        rotation[dnr].fr_randcount = drive->snap_fr_randcount;
-        rotation[dnr].filter_counter = drive->snap_filter_counter;
-        rotation[dnr].filter_state = drive->snap_filter_state;
-        rotation[dnr].filter_last_state = drive->snap_filter_state;
+        rotation[dnr].logic.ue7_dcba = drive->snap_ue7_dcba;
+        rotation[dnr].logic.ue7_counter = drive->snap_ue7_counter;
+        rotation[dnr].logic.uf4_counter = drive->snap_uf4_counter;
+        rotation[dnr].logic.fr_randcount = drive->snap_fr_randcount;
+        rotation[dnr].logic.filter_counter = drive->snap_filter_counter;
+        rotation[dnr].logic.filter_state = drive->snap_filter_state;
+        rotation[dnr].logic.filter_last_state = drive->snap_filter_state;
         rotation[dnr].write_flux = drive->snap_write_flux;
         rotation[dnr].PulseHeadPosition = drive->snap_PulseHeadPosition;
-        rotation[dnr].xorShift32 = drive->snap_xorShift32;
-        rotation[dnr].so_delay = drive->snap_so_delay;
-        rotation[dnr].cycle_index = drive->snap_cycle_index;
+        rotation[dnr].logic.xorShift32 = drive->snap_xorShift32;
+        rotation[dnr].logic.so_delay = drive->snap_so_delay;
+        rotation[dnr].logic.cycle_index = drive->snap_cycle_index;
         rotation[dnr].ref_advance = drive->snap_ref_advance;
         drive->req_ref_cycles = drive->snap_req_ref_cycles;
       }
@@ -287,13 +283,15 @@ inline static int32_t RANDOM_nextInt(rotation_t *rptr)
 
 inline static uint32_t RANDOM_nextUInt(rotation_t *rptr)
 {
-    rptr->xorShift32 ^= (rptr->xorShift32 << 13);
-    rptr->xorShift32 ^= (rptr->xorShift32 >> 17);
-    return rptr->xorShift32 ^= (rptr->xorShift32 << 5);
+    return flux_logic_random(&rptr->logic);
 }
 
 void rotation_begins(drive_t *dptr)
 {
+    if (dptr->flux != NULL) {
+        rotation_flux_rebase(dptr);
+        return;
+    }
     /*
      * FIXME: does this mean that rotation of both drives in a unit is the same?
      * Fortunately the dual drives are not emulated at this level;
@@ -301,7 +299,7 @@ void rotation_begins(drive_t *dptr)
      */
     unsigned int dnr = dptr->diskunit->mynumber;
     rotation[dnr].rotation_last_clk = *(dptr->diskunit->clk_ptr);
-    rotation[dnr].cycle_index = 0;
+    rotation[dnr].logic.cycle_index = 0;
 }
 
 /* calculate wobble factor from the respective resources */
@@ -387,86 +385,86 @@ static void rotation_1541_gcr(drive_t *dptr, CLOCK ref_cycles)
                 if (ref_cycles < (int)todo) {
                     todo = ref_cycles;
                 }
-                if ((rptr->ue7_counter < 16) && ((16 - rptr->ue7_counter) < (int)todo)) {
-                    todo = 16 - rptr->ue7_counter;
+                if ((rptr->logic.ue7_counter < 16) && ((16 - rptr->logic.ue7_counter) < (int)todo)) {
+                    todo = 16 - rptr->logic.ue7_counter;
                 }
-                if ((rptr->filter_counter < 40) && ((40 - rptr->filter_counter) < (int)todo)) {
-                    todo = 40 - rptr->filter_counter;
+                if ((rptr->logic.filter_counter < 40) && ((40 - rptr->logic.filter_counter) < (int)todo)) {
+                    todo = 40 - rptr->logic.filter_counter;
                 }
-                if ((rptr->fr_randcount > 0) && (rptr->fr_randcount < todo)) {
-                    todo = rptr->fr_randcount;
+                if ((rptr->logic.fr_randcount > 0) && (rptr->logic.fr_randcount < todo)) {
+                    todo = rptr->logic.fr_randcount;
                 }
-                if ((rptr->so_delay > 0) && (rptr->so_delay < (int)todo)) {
-                    todo = rptr->so_delay;
+                if ((rptr->logic.so_delay > 0) && (rptr->logic.so_delay < (int)todo)) {
+                    todo = rptr->logic.so_delay;
                 }
             }
 
             /* so signal handling */
-            if (rptr->so_delay) {
-                rptr->so_delay -= todo;
-                if (!rptr->so_delay) {
+            if (rptr->logic.so_delay) {
+                rptr->logic.so_delay -= todo;
+                if (!rptr->logic.so_delay) {
                     dptr->byte_ready_edge = 1;
                     dptr->byte_ready_level = 1;
                 }
             }
 
             /* do 2.5 microsecond flux filter stuff */
-            rotation[dnr].filter_counter += todo;
-            if ((rotation[dnr].filter_counter >= 40) && (rotation[dnr].filter_last_state != rotation[dnr].filter_state)) {
+            rotation[dnr].logic.filter_counter += todo;
+            if ((rotation[dnr].logic.filter_counter >= 40) && (rotation[dnr].logic.filter_last_state != rotation[dnr].logic.filter_state)) {
                 /* update the filter last state */
-                rotation[dnr].filter_last_state = rotation[dnr].filter_state;
+                rotation[dnr].logic.filter_last_state = rotation[dnr].logic.filter_state;
 
                 /* reset the counters at a flux reversal */
-                rptr->ue7_counter = rptr->ue7_dcba;
-                rptr->uf4_counter = 0;
-                rptr->fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 31) + 289;
+                rptr->logic.ue7_counter = rptr->logic.ue7_dcba;
+                rptr->logic.uf4_counter = 0;
+                rptr->logic.fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 31) + 289;
             } else {
                 /* no flux reversal detected */
                 /* start seeing random flux reversals if 18us passed since the last real flux reversal */
-                rptr->fr_randcount -= todo;
-                if (!rptr->fr_randcount) {
-                    rptr->ue7_counter = rptr->ue7_dcba;
-                    rptr->uf4_counter = 0;
-                    rptr->fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 367) + 33;
+                rptr->logic.fr_randcount -= todo;
+                if (!rptr->logic.fr_randcount) {
+                    rptr->logic.ue7_counter = rptr->logic.ue7_dcba;
+                    rptr->logic.uf4_counter = 0;
+                    rptr->logic.fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 367) + 33;
                 }
             }
 
             /* divide the reference clock with UE7 */
-            rptr->ue7_counter += todo;
-            if (rptr->ue7_counter == 16) {
+            rptr->logic.ue7_counter += todo;
+            if (rptr->logic.ue7_counter == 16) {
                 /* carry asserted; reload the counter */
-                rptr->ue7_counter = rptr->ue7_dcba;
+                rptr->logic.ue7_counter = rptr->logic.ue7_dcba;
 
-                rptr->uf4_counter = (rptr->uf4_counter + 1) & 0xf;
+                rptr->logic.uf4_counter = (rptr->logic.uf4_counter + 1) & 0xf;
 
                 /* the rising edge of UF4 stage B drives the shifter */
-                if ((rptr->uf4_counter & 0x3) == 2) {
+                if ((rptr->logic.uf4_counter & 0x3) == 2) {
                     /* 8+2 bit shifter */
 
                     /* UE5 NOR gate shifts in a 1 only at C2 when DC is 0 */
-                    rptr->last_read_data = ((rptr->last_read_data << 1) & 0x3fe) | (((rptr->uf4_counter + 0x1c) >> 4) & 0x01);
+                    rptr->logic.last_read_data = ((rptr->logic.last_read_data << 1) & 0x3fe) | (((rptr->logic.uf4_counter + 0x1c) >> 4) & 0x01);
 
-                    rptr->write_flux = rptr->last_write_data & 0x80;
-                    rptr->last_write_data <<= 1;
+                    rptr->write_flux = rptr->logic.last_write_data & 0x80;
+                    rptr->logic.last_write_data <<= 1;
 
                     /* last 10 bits asserted activates SYNC, reloads UE3, negates BYTE READY */
-                    if (rptr->last_read_data == 0x3ff) {
-                        rptr->bit_counter = 0;
+                    if (rptr->logic.last_read_data == 0x3ff) {
+                        rptr->logic.bit_counter = 0;
                         /* FIXME: code should take into account whether BYTE READY has been latched
                          * anywhere in the system or not and negate only the unlatched inputs.
                          * So we just leave it be for now
                          */
                     } else {
-                        if (++rptr->bit_counter == 8) {
-                            rptr->bit_counter = 0;
-                            dptr->GCR_read = (uint8_t) rptr->last_read_data;
-                            rptr->last_write_data = dptr->GCR_read;
+                        if (++rptr->logic.bit_counter == 8) {
+                            rptr->logic.bit_counter = 0;
+                            dptr->GCR_read = (uint8_t) rptr->logic.last_read_data;
+                            rptr->logic.last_write_data = dptr->GCR_read;
 
                             /* BYTE READY signal if enabled */
                             if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
-                                rptr->so_delay = 16 - ((rptr->cycle_index + (todo - 1)) & 15);
-                                if (rptr->so_delay < 10) {
-                                    rptr->so_delay += 16;
+                                rptr->logic.so_delay = 16 - ((rptr->logic.cycle_index + (todo - 1)) & 15);
+                                if (rptr->logic.so_delay < 10) {
+                                    rptr->logic.so_delay += 16;
                                 }
                             }
                         }
@@ -484,12 +482,12 @@ static void rotation_1541_gcr(drive_t *dptr, CLOCK ref_cycles)
                     /* reset 2.5 microsecond flux filter to a fake most ready state, because the
                      * most GCR-based images are almost clean already
                      */
-                    rotation[dnr].filter_counter = 39;
-                    rotation[dnr].filter_state = rotation[dnr].filter_state ^ 1;
+                    rotation[dnr].logic.filter_counter = 39;
+                    rotation[dnr].logic.filter_state = rotation[dnr].logic.filter_state ^ 1;
                 }
             }
 
-            rptr->cycle_index += todo;
+            rptr->logic.cycle_index += todo;
             ref_cycles -= todo;
         }
     } else {
@@ -503,18 +501,18 @@ static void rotation_1541_gcr(drive_t *dptr, CLOCK ref_cycles)
                 if (ref_cycles < (int)todo) {
                     todo = ref_cycles;
                 }
-                if ((rptr->ue7_counter < 16) && ((16 - rptr->ue7_counter) < (int)todo)) {
-                    todo = 16 - rptr->ue7_counter;
+                if ((rptr->logic.ue7_counter < 16) && ((16 - rptr->logic.ue7_counter) < (int)todo)) {
+                    todo = 16 - rptr->logic.ue7_counter;
                 }
-                if ((rptr->so_delay > 0) && (rptr->so_delay < (int)todo)) {
-                    todo = rptr->so_delay;
+                if ((rptr->logic.so_delay > 0) && (rptr->logic.so_delay < (int)todo)) {
+                    todo = rptr->logic.so_delay;
                 }
             }
 
             /* so signal handling */
-            if (rptr->so_delay) {
-                rptr->so_delay -= todo;
-                if (!rptr->so_delay) {
+            if (rptr->logic.so_delay) {
+                rptr->logic.so_delay -= todo;
+                if (!rptr->logic.so_delay) {
                     dptr->byte_ready_edge = 1;
                     dptr->byte_ready_level = 1;
                 }
@@ -527,43 +525,43 @@ static void rotation_1541_gcr(drive_t *dptr, CLOCK ref_cycles)
             }
 
             /* divide the reference clock with UE7 */
-            rptr->ue7_counter += todo;
-            if (rptr->ue7_counter == 16) {
+            rptr->logic.ue7_counter += todo;
+            if (rptr->logic.ue7_counter == 16) {
                 /* carry asserted; reload the counter */
-                rptr->ue7_counter = rptr->ue7_dcba;
+                rptr->logic.ue7_counter = rptr->logic.ue7_dcba;
 
-                rptr->uf4_counter = (rptr->uf4_counter + 1) & 0xf;
+                rptr->logic.uf4_counter = (rptr->logic.uf4_counter + 1) & 0xf;
 
                 /* the rising edge of UF4 stage B drives the shifter */
-                if ((rptr->uf4_counter & 0x3) == 2) {
+                if ((rptr->logic.uf4_counter & 0x3) == 2) {
                     /* 8+2 bit shifter */
 
                     /* UE5 NOR gate shifts in a 1 only at C2 when DC is 0 */
-                    rptr->last_read_data = ((rptr->last_read_data << 1) & 0x3fe) | (((rptr->uf4_counter + 0x1c) >> 4) & 0x01);
+                    rptr->logic.last_read_data = ((rptr->logic.last_read_data << 1) & 0x3fe) | (((rptr->logic.uf4_counter + 0x1c) >> 4) & 0x01);
 
-                    write_next_bit(dptr, rptr->last_write_data & 0x80);
+                    write_next_bit(dptr, rptr->logic.last_write_data & 0x80);
 
-                    rptr->last_write_data <<= 1;
+                    rptr->logic.last_write_data <<= 1;
 
                     rptr->accum = cyc_sum_frv * 2;
 
-                    if (++rptr->bit_counter == 8) {
-                        rptr->bit_counter = 0;
+                    if (++rptr->logic.bit_counter == 8) {
+                        rptr->logic.bit_counter = 0;
 
-                        rptr->last_write_data = dptr->GCR_write_value;
+                        rptr->logic.last_write_data = dptr->GCR_write_value;
 
                         /* BYTE READY signal if enabled */
                         if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
-                            rptr->so_delay = 16 - ((rptr->cycle_index + (todo - 1)) & 15);
-                            if (rptr->so_delay < 10) {
-                                rptr->so_delay += 16;
+                            rptr->logic.so_delay = 16 - ((rptr->logic.cycle_index + (todo - 1)) & 15);
+                            if (rptr->logic.so_delay < 10) {
+                                rptr->logic.so_delay += 16;
                             }
                         }
                     }
                 }
             }
 
-            rptr->cycle_index += todo;
+            rptr->logic.cycle_index += todo;
             ref_cycles -= todo;
         }
     }
@@ -613,6 +611,124 @@ static void rotation_1541_gcr_cycle(drive_t *dptr)
  * 1541 circuit simulation for NZRI transition flux pulse-based images (.p64),
  * see 1541 circuit description in this file for details
  ******************************************************************************/
+
+/* Shared read-side circuit only. P64 input positioning and writing stay in
+   their existing wrappers; native input supplies exact capture timestamps. */
+static CLOCK rotation_1541_read_limit(const rotation_t *rptr, CLOCK limit)
+{
+    return flux_logic_limit(&rptr->logic, limit);
+}
+
+static void rotation_1541_read_clock(drive_t *dptr, rotation_t *rptr, CLOCK clocks)
+{
+    flux_logic_output_t out = {dptr->GCR_read, dptr->byte_ready_edge, dptr->byte_ready_level, -1};
+    flux_logic_clock(&rptr->logic, &out, clocks, !!(dptr->byte_ready_active & BRA_BYTE_READY));
+    dptr->GCR_read = out.byte;
+    dptr->byte_ready_edge = out.ready_edge;
+    dptr->byte_ready_level = out.ready_level;
+}
+
+int rotation_flux_bind(rotation_flux_t *input, const flux_capture_t *capture,
+                       unsigned int halftrack)
+{
+    int rc;
+    if (input == NULL) {
+        return FLUX_INVALID;
+    }
+    rc = flux_playback_bind(&input->playback, capture, halftrack);
+    if (rc == FLUX_OK) {
+        input->reference_phase = 0;
+        input->fault = 0;
+    }
+    return rc;
+}
+
+void rotation_flux_unbind(rotation_flux_t *input)
+{
+    rotation_flux_t empty = {0};
+    if (input != NULL) {
+        *input = empty;
+    }
+}
+
+void rotation_flux_rebase(drive_t *dptr)
+{
+    rotation_t *rptr = &rotation[dptr->diskunit->mynumber];
+    rptr->rotation_last_clk = *dptr->diskunit->clk_ptr;
+    rptr->ref_advance = 0;
+    dptr->req_ref_cycles = 0;
+    if (dptr->flux != NULL && !dptr->flux->fault) {
+        flux_playback_set_motor(&dptr->flux->playback,
+                                dptr->byte_ready_active & BRA_MOTOR_ON);
+    }
+}
+
+int rotation_flux_clock(drive_t *dptr)
+{
+    rotation_t *rptr = &rotation[dptr->diskunit->mynumber];
+    rotation_flux_t *input = dptr->flux;
+    CLOCK clk = *dptr->diskunit->clk_ptr;
+    uint64_t cpu_cycles, ref_cycles, advance = dptr->req_ref_cycles & 15;
+    unsigned int shift = rptr->frequency ? 3 : 4;
+    int rc;
+
+    if (input == NULL || input->fault) {
+        return FLUX_INVALID;
+    }
+    if (!(dptr->byte_ready_active & BRA_MOTOR_ON)) {
+        flux_playback_set_motor(&input->playback, 0);
+        rotation_flux_rebase(dptr);
+        return FLUX_OK;
+    }
+    if (!input->playback.state.motor) {
+        /* A motor-on edge normally calls rotation_begins. Also make the
+           first call safe if a restored/control path omitted that callback. */
+        rotation_flux_rebase(dptr);
+        return FLUX_OK;
+    }
+    cpu_cycles = clk - rptr->rotation_last_clk;
+    if (cpu_cycles > (UINT64_MAX - advance) >> shift) {
+        return FLUX_RANGE;
+    }
+    ref_cycles = (cpu_cycles << shift) + advance;
+    if (ref_cycles > rptr->ref_advance) {
+        uint64_t due = ref_cycles - rptr->ref_advance;
+        if (due > UINT64_MAX / 5) {
+            return FLUX_RANGE;
+        }
+        rc = rotation_flux_advance(dptr, input, due * 5);
+        if (rc != FLUX_OK) {
+            return rc;
+        }
+        rptr->ref_advance = advance;
+    } else {
+        rptr->ref_advance -= ref_cycles;
+    }
+    rptr->rotation_last_clk = clk;
+    dptr->req_ref_cycles = 0;
+    return FLUX_OK;
+}
+
+int rotation_flux_advance(drive_t *dptr, rotation_flux_t *input, uint64_t ticks)
+{
+    rotation_t *rptr;
+    flux_logic_output_t out;
+    int rc;
+    if (!dptr || !dptr->diskunit || !input || dptr->diskunit->mynumber >= NUM_DISK_UNITS) {
+        return FLUX_INVALID;
+    }
+    rptr = &rotation[dptr->diskunit->mynumber];
+    out.byte = dptr->GCR_read;
+    out.ready_edge = dptr->byte_ready_edge;
+    out.ready_level = dptr->byte_ready_level;
+    out.bit = -1;
+    rc = flux_logic_advance(&rptr->logic, &out, &input->playback, &input->reference_phase,
+                            ticks, !!(dptr->byte_ready_active & BRA_BYTE_READY), NULL, NULL);
+    dptr->GCR_read = out.byte;
+    dptr->byte_ready_edge = out.ready_edge;
+    dptr->byte_ready_level = out.ready_level;
+    return rc;
+}
 
 /* Calculate delta to the next NRZI transition flux pulse */
 static inline int rotation_p64_get_delta(drive_t *dptr)
@@ -668,109 +784,12 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
     if (dptr->read_write_mode) {
         while (ref_cycles > 0) {
             /****************************************************************************************************************************************/
-            {
-                /* How-Much-16MHz-Clock-Cycles-ToDo-Count logic */
-
-                ToDo = DeltaPositionToNextPulse;
-                if (ToDo <= 1) {
-                    ToDo = 1;
-                } else {
-                    if (ref_cycles < (int)ToDo) {
-                        ToDo = ref_cycles;
-                    }
-                    if ((rptr->ue7_counter < 16) && ((16 - rptr->ue7_counter) < (int)ToDo)) {
-                        ToDo = 16 - rptr->ue7_counter;
-                    }
-                    if ((rptr->filter_counter < 40) && ((40 - rptr->filter_counter) < (int)ToDo)) {
-                        ToDo = 40 - rptr->filter_counter;
-                    }
-                    if ((rptr->fr_randcount > 0) && (rptr->fr_randcount < ToDo)) {
-                        ToDo = rptr->fr_randcount;
-                    }
-                    if ((rptr->so_delay > 0) && (rptr->so_delay < (int)ToDo)) {
-                        ToDo = rptr->so_delay;
-                    }
-                }
+            ToDo = DeltaPositionToNextPulse;
+            if (ToDo > 1 && ref_cycles < ToDo) {
+                ToDo = ref_cycles;
             }
-            /****************************************************************************************************************************************/
-            {
-                /* so signal handling */
-                if (rptr->so_delay) {
-                    rptr->so_delay -= ToDo;
-                    if (!rptr->so_delay) {
-                        dptr->byte_ready_edge = 1;
-                        dptr->byte_ready_level = 1;
-                    }
-                }
-            }
-            /****************************************************************************************************************************************/
-            {
-                /* Clock logic */
-
-                /* update UE7 before a possible reset of decoder to start with requested speedzone instead of todo value */
-                rptr->ue7_counter += ToDo;
-                /* 2.5 microseconds filter */
-                rptr->filter_counter += (rptr->filter_counter < 40) ? ToDo : 0;
-                if (((rptr->filter_counter >= 40) && (rptr->filter_state != rptr->filter_last_state))) {
-                    rptr->filter_last_state = rptr->filter_state;
-                    rptr->uf4_counter = 0;
-                    rptr->ue7_counter = rptr->ue7_dcba;
-                    rptr->fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 31) + 289;
-                } else {
-                    rptr->fr_randcount -= ToDo;
-                    if (!rptr->fr_randcount) {
-                        rptr->uf4_counter = 0;
-                        rptr->ue7_counter = rptr->ue7_dcba;
-                        rptr->fr_randcount = ((RANDOM_nextUInt(rptr) >> 16) % 367) + 33;
-                    }
-                }
-
-                /* Increment the pulse divider clock until the speed zone pulse divider clock threshold value is reached, which is:
-                ** 16-(CurrentSpeedZone & 3), and each overflow, increment the pulse counter clock until the 4th pulse is reached
-                */
-
-                if (rptr->ue7_counter == 16) {
-                    rptr->ue7_counter = rptr->ue7_dcba;
-
-                    rptr->uf4_counter = (rptr->uf4_counter + 1) & 0xf;
-                    if ((rptr->uf4_counter & 3) == 2) {
-                        /****************************************************************************************************************************************/
-                        {
-                            /* Decoder logic */
-
-                            rptr->last_read_data = ((rptr->last_read_data << 1) & 0x3fe) | (((rptr->uf4_counter + 0x1c) >> 4) & 1);
-
-                            rptr->last_write_data <<= 1;
-
-                            /* is sync? reset bit counter, don't move data, etc. */
-                            if (rptr->last_read_data == 0x3ff) {
-                                rptr->bit_counter = 0;
-                            } else {
-                                if (++rptr->bit_counter == 8) {
-                                    rptr->bit_counter = 0;
-
-                                    dptr->GCR_read = (uint8_t) rptr->last_read_data;
-
-                                    /* tlr claims that the write register is loaded at every
-                                     * byte boundary, and since the bus is shared, it's reasonable
-                                     * to guess that it would be loaded with whatever was last read. */
-                                    rptr->last_write_data = dptr->GCR_read;
-
-                                    /* BYTE READY signal if enabled */
-                                    if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
-                                        rptr->so_delay = 16 - ((rptr->cycle_index + (ToDo - 1)) & 15);
-                                        if (rptr->so_delay < 10) {
-                                            rptr->so_delay += 16;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        /****************************************************************************************************************************************/
-                    }
-                }
-            }
-            /****************************************************************************************************************************************/
+            ToDo = rotation_1541_read_limit(rptr, ToDo);
+            rotation_1541_read_clock(dptr, rptr, ToDo);
             {
                 /* Head logic */
 
@@ -798,8 +817,8 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
                         /* Forward pulse high hit to the decoder logic */
                         if ((Strength == 0xffffffffUL) ||                                   /* Strong pulse */
                             (((uint32_t)(RANDOM_nextInt(rptr) ^ 0x80000000UL)) < Strength)) {  /* Weak pulse */
-                            rptr->filter_state ^= 1;
-                            rptr->filter_counter = 0;
+                            rptr->logic.filter_state ^= 1;
+                            rptr->logic.filter_counter = 0;
                         }
 
                         P64PulseStream->CurrentIndex = P64PulseStream->Pulses[P64PulseStream->CurrentIndex].Next;
@@ -809,7 +828,7 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
             }
             /****************************************************************************************************************************************/
 
-            rptr->cycle_index += ToDo;
+            rptr->logic.cycle_index += ToDo;
             ref_cycles -= ToDo;
         }
     } else {
@@ -832,20 +851,20 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
                     if (ref_cycles < (int)ToDo) {
                         ToDo = ref_cycles;
                     }
-                    if ((rptr->ue7_counter < 16) && ((16 - rptr->ue7_counter) < (int)ToDo)) {
-                        ToDo = 16 - rptr->ue7_counter;
+                    if ((rptr->logic.ue7_counter < 16) && ((16 - rptr->logic.ue7_counter) < (int)ToDo)) {
+                        ToDo = 16 - rptr->logic.ue7_counter;
                     }
-                    if ((rptr->so_delay > 0) && (rptr->so_delay < (int)ToDo)) {
-                        ToDo = rptr->so_delay;
+                    if ((rptr->logic.so_delay > 0) && (rptr->logic.so_delay < (int)ToDo)) {
+                        ToDo = rptr->logic.so_delay;
                     }
                 }
             }
             /****************************************************************************************************************************************/
             {
                 /* so signal handling */
-                if (rptr->so_delay) {
-                    rptr->so_delay -= ToDo;
-                    if (!rptr->so_delay) {
+                if (rptr->logic.so_delay) {
+                    rptr->logic.so_delay -= ToDo;
+                    if (!rptr->logic.so_delay) {
                         dptr->byte_ready_edge = 1;
                         dptr->byte_ready_level = 1;
                     }
@@ -858,31 +877,31 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
                 /* Increment the pulse divider clock until the speed zone pulse divider clock threshold value is reached, which is:
                 ** 16-(CurrentSpeedZone & 3), and each overflow, increment the pulse counter clock until the 4th pulse is reached
                 */
-                rptr->ue7_counter += ToDo;
-                if (rptr->ue7_counter == 16) {
-                    rptr->ue7_counter = rptr->ue7_dcba;
+                rptr->logic.ue7_counter += ToDo;
+                if (rptr->logic.ue7_counter == 16) {
+                    rptr->logic.ue7_counter = rptr->logic.ue7_dcba;
 
-                    rptr->uf4_counter = (rptr->uf4_counter + 1) & 0xf;
-                    if ((rptr->uf4_counter & 3) == 2) {
+                    rptr->logic.uf4_counter = (rptr->logic.uf4_counter + 1) & 0xf;
+                    if ((rptr->logic.uf4_counter & 3) == 2) {
                         /****************************************************************************************************************************************/
 
                         /* Encoder logic */
 
-                        rptr->last_read_data = ((rptr->last_read_data << 1) & 0x3fe) | (((rptr->uf4_counter + 0x1c) >> 4) & 1);
+                        rptr->logic.last_read_data = ((rptr->logic.last_read_data << 1) & 0x3fe) | (((rptr->logic.uf4_counter + 0x1c) >> 4) & 1);
 
-                        head_write = (rptr->last_write_data & 0x80) >> 7;
-                        rptr->last_write_data <<= 1;
+                        head_write = (rptr->logic.last_write_data & 0x80) >> 7;
+                        rptr->logic.last_write_data <<= 1;
 
-                        if (++rptr->bit_counter == 8) {
-                            rptr->bit_counter = 0;
+                        if (++rptr->logic.bit_counter == 8) {
+                            rptr->logic.bit_counter = 0;
 
-                            rptr->last_write_data = dptr->GCR_write_value;
+                            rptr->logic.last_write_data = dptr->GCR_write_value;
 
                             /* BYTE READY signal if enabled */
                             if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
-                                rptr->so_delay = 16 - ((rptr->cycle_index + (ToDo - 1)) & 15);
-                                if (rptr->so_delay < 10) {
-                                    rptr->so_delay += 16;
+                                rptr->logic.so_delay = 16 - ((rptr->logic.cycle_index + (ToDo - 1)) & 15);
+                                if (rptr->logic.so_delay < 10) {
+                                    rptr->logic.so_delay += 16;
                                 }
                             }
                         }
@@ -935,7 +954,7 @@ static void rotation_1541_p64(drive_t *dptr, CLOCK ref_cycles)
             }
             /****************************************************************************************************************************************/
 
-            rptr->cycle_index += ToDo;
+            rptr->logic.cycle_index += ToDo;
             ref_cycles -= ToDo;
         }
     }
@@ -1020,8 +1039,8 @@ static void rotation_1541_simple(drive_t *dptr)
 
     if (dptr->read_write_mode) {
         int off = dptr->GCR_head_offset;
-        unsigned int byte, last_read_data = rptr->last_read_data << 7;
-        unsigned int bit_counter = rptr->bit_counter;
+        unsigned int byte, last_read_data = rptr->logic.last_read_data << 7;
+        unsigned int bit_counter = rptr->logic.bit_counter;
 
         /* if no image is attached or track does not exists, read 0 */
         if (dptr->GCR_image_loaded == 0 || dptr->GCR_track_start_ptr == NULL) {
@@ -1046,7 +1065,7 @@ static void rotation_1541_simple(drive_t *dptr)
 
             last_read_data <<= 1;
             last_read_data |= byte & 0x80;
-            rptr->last_write_data <<= 1;
+            rptr->logic.last_write_data <<= 1;
 
             /* is sync? reset bit counter, don't move data, etc. */
             if (~last_read_data & 0x1ff80) {
@@ -1056,7 +1075,7 @@ static void rotation_1541_simple(drive_t *dptr)
                     /* tlr claims that the write register is loaded at every
                      * byte boundary, and since the bus is shared, it's reasonable
                      * to guess that it would be loaded with whatever was last read. */
-                    rptr->last_write_data = dptr->GCR_read;
+                    rptr->logic.last_write_data = dptr->GCR_read;
                     if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
                         dptr->byte_ready_edge = 1;
                         dptr->byte_ready_level = 1;
@@ -1066,8 +1085,8 @@ static void rotation_1541_simple(drive_t *dptr)
                 bit_counter = 0;
             }
         }
-        rptr->last_read_data = (last_read_data >> 7) & 0x3ff;
-        rptr->bit_counter = bit_counter;
+        rptr->logic.last_read_data = (last_read_data >> 7) & 0x3ff;
+        rptr->logic.bit_counter = bit_counter;
         dptr->GCR_head_offset = off;
         if (!dptr->GCR_read) {    /* can only happen if on a half or unformatted track */
             dptr->GCR_read = 0x11; /* should be good enough, there's no data after all */
@@ -1077,17 +1096,17 @@ static void rotation_1541_simple(drive_t *dptr)
          * bits from the last read value.
          */
         while (bits_moved-- != 0) {
-            rptr->last_read_data = (rptr->last_read_data << 1) & 0x3fe;
-            if ((rptr->last_read_data & 0xf) == 0) {
-                rptr->last_read_data |= 1;
+            rptr->logic.last_read_data = (rptr->logic.last_read_data << 1) & 0x3fe;
+            if ((rptr->logic.last_read_data & 0xf) == 0) {
+                rptr->logic.last_read_data |= 1;
             }
 
-            write_next_bit(dptr, rptr->last_write_data & 0x80);
-            rptr->last_write_data <<= 1;
+            write_next_bit(dptr, rptr->logic.last_write_data & 0x80);
+            rptr->logic.last_write_data <<= 1;
 
-            if (++rptr->bit_counter == 8) {
-                rptr->bit_counter = 0;
-                rptr->last_write_data = dptr->GCR_write_value;
+            if (++rptr->logic.bit_counter == 8) {
+                rptr->logic.bit_counter = 0;
+                rptr->logic.last_write_data = dptr->GCR_write_value;
                 if ((dptr->byte_ready_active & BRA_BYTE_READY) != 0) {
                     dptr->byte_ready_edge = 1;
                     dptr->byte_ready_level = 1;
@@ -1105,6 +1124,18 @@ static void rotation_1541_simple(drive_t *dptr)
  ******************************************************************************/
 void rotation_rotate_disk(drive_t *dptr)
 {
+    if (dptr->flux != NULL) {
+        /* Native timing is measured input, so no synthetic RPM/wobble and
+           no P64 whole-rotation catch-up shortcut may run here. */
+        if (!dptr->flux->fault && rotation_flux_clock(dptr) != FLUX_OK) {
+            /* Range exhaustion stops input safely; never wrap its epoch. */
+            flux_playback_set_motor(&dptr->flux->playback, 0);
+            dptr->flux->fault = 1;
+            log_error(dptr->diskunit->log, "Native flux clock state exhausted or invalid.");
+            dptr->req_ref_cycles = 0;
+        }
+        return;
+    }
     if ((dptr->byte_ready_active & BRA_MOTOR_ON) == 0) {
         dptr->req_ref_cycles = 0;
         return;
@@ -1139,7 +1170,7 @@ uint8_t rotation_sync_found(drive_t *dptr)
         return 0x80;
     }
 
-    return rotation[dnr].last_read_data == 0x3ff ? 0 : 0x80;
+    return rotation[dnr].logic.last_read_data == 0x3ff ? 0 : 0x80;
 }
 
 void rotation_byte_read(drive_t *dptr)

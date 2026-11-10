@@ -61,6 +61,11 @@ uint8_t drive_writeprotect_sense(drive_t *dptr)
         dptr->attach_clk = (CLOCK)0;
     }
 
+    if (dptr->flux != NULL) {
+        /* Native captures are present and permanently write protected,
+           independently of the advisory attachment setting. */
+        return 0x0;
+    }
     if ((dptr->GCR_image_loaded == 0) && (dptr->P64_image_loaded == 0)) {
         /* No disk in drive, write protection is off. */
         return 0x10;

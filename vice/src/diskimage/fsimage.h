@@ -33,6 +33,8 @@
 
 struct disk_image_s;
 struct disk_addr_s;
+struct flux_capture_s;
+struct flux_view_s;
 
 typedef struct fsimage_s {
     FILE *fd;
@@ -42,6 +44,10 @@ typedef struct fsimage_s {
         int dirty;
         int len;
     } error_info;
+    /* Sole owner. Drive cursors must unbind before close/media destruction. */
+    struct flux_capture_s *flux;
+    unsigned int flux_only; /* Snapshot-owned native capture, no file handle. */
+    struct flux_view_s *flux_view; /* Private DOS view; never a drive cursor. */
 } fsimage_t;
 
 

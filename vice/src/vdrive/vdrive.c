@@ -464,6 +464,7 @@ int vdrive_attach_image(disk_image_t *image, unsigned int unit,
             vdrive->current_offset = 0;
             break;
         case DISK_IMAGE_TYPE_G64:
+        case DISK_IMAGE_TYPE_SCP:
             vdrive->image_format = VDRIVE_IMAGE_FORMAT_1541;
             vdrive->num_tracks = NUM_TRACKS_1541;
             vdrive->bam_size = 0x100;

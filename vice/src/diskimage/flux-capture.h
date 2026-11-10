@@ -44,9 +44,15 @@ const flux_track_t *flux_capture_track(const flux_capture_t *capture, unsigned i
 uint64_t flux_track_boundary(const flux_track_t *track, unsigned int boundary);
 uint64_t flux_track_duration(const flux_track_t *track, unsigned int revolution);
 uint64_t flux_track_period(const flux_track_t *track);
+/* Immutable serialization view for provider-neutral snapshots. */
+size_t flux_track_word_count(const flux_track_t *track);
+uint32_t flux_track_unit_ticks(const flux_track_t *track);
+const uint16_t *flux_track_words(const flux_track_t *track);
 
 /* Decoder cursor uses word offsets and cumulative time, not allocated pulses.
-   seek is bounded by one checkpoint block plus the next overflow interval. */
+   seek is bounded by one checkpoint block plus the next overflow interval.
+   A real edge exactly at the capture endpoint is included; later samples
+   are excluded. Playback assigns that endpoint edge to the loop seam. */
 typedef struct flux_scan_s {
     size_t word;
     uint64_t time;

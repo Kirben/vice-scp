@@ -85,6 +85,7 @@
 #include "vdrive-bam.h"
 #include "vice-event.h"
 #include "vsync.h"
+#include "zfile.h"
 
 #ifdef DEBUG_AUTOSTART
 #define DBG(_x_) log_printf  _x_
@@ -933,27 +934,34 @@ static void init_drive_emulation_state(int unit, int drive)
 */
 
 /* FIXME: perhaps we should not call this when autostarting from tape */
+static int autostart_native_image(int unit, int drive)
+{
+    disk_image_t *image = file_system_get_image(unit, drive);
+    return image && image->type == DISK_IMAGE_TYPE_SCP;
+}
+
 static void restore_drive_emulation_state(int unit, int drive)
 {
+    int native = autostart_native_image(unit, drive);
     DBG(("restore_drive_emulation_state(unit: %d drive: %d)", unit, drive));
 
-    if (orig_drive_true_emulation_state && copy_virtual_state_to_tde) {
+    if (!native && orig_drive_true_emulation_state && copy_virtual_state_to_tde) {
         disk_copy_state_virtual_to_tde();
     }
 
-    if (orig_device_traps_state != -1) {
+    if (!native && orig_device_traps_state != -1) {
         /* set device traps to original state */
         if (get_device_traps_state(unit) != orig_device_traps_state) {
             set_device_traps_state(unit, orig_device_traps_state);
         }
     }
-    if (orig_bus_device_state != -1) {
+    if (!native && orig_bus_device_state != -1) {
         /* set iec device to original state */
         if (get_bus_device_state(unit) != orig_bus_device_state) {
             set_bus_device_state(unit, orig_bus_device_state);
         }
     }
-    if (orig_drive_true_emulation_state != -1) {
+    if (!native && orig_drive_true_emulation_state != -1) {
         /* set TDE to original state */
         if (get_true_drive_emulation_state(unit) != orig_drive_true_emulation_state) {
             set_true_drive_emulation_mode(unit, orig_drive_true_emulation_state);
@@ -1785,6 +1793,14 @@ static void reboot_for_autostart(const char *program_name, unsigned int mode,
 */
 static void setup_for_disk(int unit, int drive)
 {
+    if (autostart_native_image(unit, drive)) {
+        /* The sector view is only for names/previews. Loading always runs
+           through the live drive circuit, without virtual state injection. */
+        copy_virtual_state_to_tde = 0;
+        autostart_disk_unit = unit;
+        autostart_disk_drive = drive;
+        return;
+    }
     if (AutostartHandleTrueDriveEmulation) {
         DBG(("setup_for_disk - handle TDE"));
 #if 0
@@ -1863,6 +1879,10 @@ static void setup_for_disk(int unit, int drive)
 */
 static void setup_for_disk_ready(int unit, int drive)
 {
+    if (autostart_native_image(unit, drive)) {
+        copy_virtual_state_to_tde = 0;
+        return;
+    }
     if (AutostartHandleTrueDriveEmulation) {
         DBG(("setup_for_disk_ready - handle TDE"));
 
@@ -2459,10 +2479,24 @@ int autostart_autodetect_opt_prgname(const char *file_prog_name,
 
  * \return  0 on success, -1 on failure
  */
+static int autostart_scp_signature(const char *file_name)
+{
+    unsigned char signature[3];
+    FILE *fd = zfile_fopen(file_name, MODE_READ);
+    int matched = 0;
+    if (fd != NULL) {
+        matched = fread(signature, 1, sizeof(signature), fd) == sizeof(signature)
+                  && memcmp(signature, "SCP", sizeof(signature)) == 0;
+        zfile_fclose(fd);
+    }
+    return matched;
+}
+
 int autostart_autodetect(const char *file_name, const char *program_name,
                          unsigned int program_number, unsigned int runmode)
 {
     int unit = DRIVE_UNIT_MIN, drive = 0;
+    int native_scp;
 #ifdef HAVE_NATIVE_GTK3
     if (!mainlock_is_vice_thread()) {
         mainlock_assert_lock_obtained();
@@ -2489,10 +2523,21 @@ int autostart_autodetect(const char *file_name, const char *program_name,
 
     log_message(autostart_log, "Autodetecting image type of `%s'.", file_name);
 
+    native_scp = autostart_scp_signature(file_name);
+
     /* autostart_disk does probing internally, so not required here */
     if (autostart_disk(unit, drive, file_name, program_name, program_number, runmode) == 0) {
         log_message(autostart_log, "`%s' recognized as disk image.", file_name);
         return 0;
+    }
+
+    if (native_scp) {
+        /* Recognition is authoritative even if parsing, native attachment or
+           directory selection failed. Never inject rejected flux as a PRG. */
+        copy_virtual_state_to_tde = 0;
+        restore_drive_emulation_state(unit, drive);
+        log_error(autostart_log, "SCP autostart failed; not trying other file types.");
+        return -1;
     }
 
     /* DTV has no tape port, SCPU makes tape non operational */

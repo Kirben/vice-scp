@@ -213,6 +213,29 @@ class NativeTests(unittest.TestCase):
         cap = self.load(scp({0: [(1000, [100, 500])]}))
         self.assertEqual(self.run_ticks(self.cursor(cap), 2300), [(200, 1), (1200, 1), (2000, 6), (2200, 1)])
 
+    def test_real_capture_endpoint_edge_replayed_once(self):
+        cap = self.load(scp({0: [(1000, [100, 900])]}))
+        cursor = self.cursor(cap)
+        self.assertEqual(self.run_ticks(cursor, 4000),
+                         [(200, 1), (2000, 6), (2000, 1), (2200, 1), (4000, 6), (4000, 1)])
+        self.assertEqual(self.run_ticks(cursor, 0), [])
+
+    def test_capture_endpoint_edge_restore_before_and_after(self):
+        cap = self.load(scp({0: [(1000, [100, 900])]}))
+        cursor = self.cursor(cap)
+        self.run_ticks(cursor, 1999)
+        kind = U32()
+        self.assertEqual(advance(C.byref(cursor), 1, C.byref(kind)), 0)
+        self.assertEqual(kind.value, 6)
+        saved = State.from_buffer_copy(bytes(cursor.state))
+        restored = Cursor()
+        self.assertEqual(restore(C.byref(restored), cap, C.byref(saved)), 0)
+        self.assertEqual(self.run_ticks(restored, 0), [(2000, 1)])
+        consumed = State.from_buffer_copy(bytes(restored.state))
+        self.assertEqual(restore(C.byref(restored), cap, C.byref(consumed)), 0)
+        self.assertEqual(self.run_ticks(restored, 0), [])
+        self.assertEqual(self.run_ticks(restored, 200), [(2200, 1)])
+
     def test_uncued_first_window_is_not_discarded(self):
         cap = self.load(scp({0: [(1000, [100]), (1000, [1100])]}, flags=0))
         self.assertEqual(flags(cap), 0)
@@ -327,6 +350,8 @@ class NativeTests(unittest.TestCase):
                         expected.append((elapsed + pulse - boundaries[rev], 1))
                 elapsed += durations[rev]
                 expected.append((elapsed, 6 if rev + 1 == len(durations) else 2))
+                if rev + 1 == len(durations) and boundaries[-1] in timestamps:
+                    expected.append((elapsed, 1))
             # Include any edge exactly at the next window start, as the
             # scheduler consumes zero-delay events at the endpoint too.
             if boundaries[0] in timestamps:

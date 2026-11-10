@@ -35,6 +35,9 @@
 #include "fsimage-dxx.h"
 #include "fsimage-gcr.h"
 #include "fsimage-p64.h"
+#include "fsimage-scp.h"
+#include "scp-reader.h"
+#include "flux-view.h"
 #include "fsimage-probe.h"
 #include "fsimage.h"
 #include "lib.h"
@@ -120,11 +123,16 @@ void fsimage_media_destroy(disk_image_t *image)
 
     fsimage = image->media.fsimage;
 
+    if (fsimage == NULL) {
+        return;
+    }
     if (fsimage->fd) {
         fsimage_close(image);
     }
+    fsimage_scp_dispose(image);
     lib_free(fsimage->name);
     lib_free(fsimage);
+    image->media.fsimage = NULL;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -176,6 +184,7 @@ int fsimage_open(disk_image_t *image)
     fsimage_t *fsimage;
     size_t length;
     unsigned int isdir;
+    int scp_result;
 
     DBG(("fsimage_open image:%p", image));
 
@@ -194,7 +203,29 @@ int fsimage_open(disk_image_t *image)
         return -1;
     }
 
-    /* proceed with normal opening */
+    /* Identify SCP through a read-only handle, irrespective of its extension
+       or the user's writable-attachment setting. Never give an SCP image a
+       writable zfile handle (including on failed validation). */
+    fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
+    if (fsimage->fd == NULL) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+    image->type = DISK_IMAGE_TYPE_UNKNOWN;
+    scp_result = fsimage_scp_read(image);
+    if (scp_result == FLUX_OK) {
+        return 0;
+    }
+    if (scp_result != SCP_FILE_NOT_MATCHED) {
+        log_error(fsimage_log, "Invalid or unsupported SCP image `%s' (%d).",
+                  fsimage->name, scp_result);
+        fsimage_close(image);
+        return -1;
+    }
+    zfile_fclose(fsimage->fd);
+    fsimage->fd = NULL;
+
+    /* Other formats retain their existing writable/fallback policy. */
     if (image->read_only) {
         fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
     } else {
@@ -228,7 +259,13 @@ int fsimage_close(disk_image_t *image)
     DBG(("fsimage_close image:%p", image));
     fsimage = image->media.fsimage;
 
+    /* Native data is never flushed. Also handles disposal after an earlier
+       close or a failed probe. No drive may retain a borrowed cursor here. */
+    fsimage_scp_dispose(image);
     if (fsimage->fd == NULL) {
+        if (fsimage->flux_only) {
+            return 0;
+        }
         log_error(fsimage_log, "Cannot close file `%s'.", fsimage->name);
         return -1;
     }
@@ -256,8 +293,17 @@ int fsimage_read_sector(const disk_image_t *image, uint8_t *buf, const disk_addr
 
     fsimage = image->media.fsimage;
 
-    if (fsimage == NULL || fsimage->fd == NULL) {
+    if (fsimage == NULL) {
         log_error(fsimage_log, "Attempt to read without disk image.");
+        return CBMDOS_IPE_NOT_READY;
+    }
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        if (fsimage->flux_view == NULL) {
+            fsimage->flux_view = flux_view_create(fsimage->flux);
+        }
+        return flux_view_read(fsimage->flux_view, dadr->track, dadr->sector, buf);
+    }
+    if (fsimage->fd == NULL) {
         return CBMDOS_IPE_NOT_READY;
     }
 
@@ -295,6 +341,9 @@ int fsimage_write_sector(disk_image_t *image, const uint8_t *buf,
 {
     fsimage_t *fsimage;
 
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        return -1;
+    }
     fsimage = image->media.fsimage;
 
     if (fsimage->fd == NULL) {
@@ -357,5 +406,5 @@ off_t fsimage_size(const disk_image_t *image)
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
-    return archdep_file_size(fsimage->fd);
+    return fsimage->fd ? archdep_file_size(fsimage->fd) : 0;
 }

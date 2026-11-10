@@ -68,6 +68,7 @@
 #define DISK_IMAGE_TYPE_G64 100
 #define DISK_IMAGE_TYPE_G71 101
 #define DISK_IMAGE_TYPE_P64 200
+#define DISK_IMAGE_TYPE_SCP 201
 #define DISK_IMAGE_TYPE_D64 1541
 #define DISK_IMAGE_TYPE_D67 2040
 #define DISK_IMAGE_TYPE_D71 1571
@@ -86,6 +87,7 @@ struct rawimage_s;
 struct gcr_s;
 struct TP64Image;
 struct disk_track_s;
+struct flux_capture_s;
 
 struct disk_image_s {
     union media_u {
@@ -117,6 +119,8 @@ void disk_image_resources_shutdown(void);
 void disk_image_fsimage_name_set(disk_image_t *image, const char *name);
 const char *disk_image_fsimage_name_get(const disk_image_t *image);
 void *disk_image_fsimage_fd_get(const disk_image_t *image);
+/* Borrowed immutable data; valid until image close/media destruction. */
+const struct flux_capture_s *disk_image_flux_capture_get(const disk_image_t *image);
 int disk_image_fsimage_create(const char *name, unsigned int type);
 int disk_image_fsimage_create_dxm(const char *name, const char *diskname, unsigned int type);
 int disk_image_fsimage_create_dhd(const char *name, const char *diskname, unsigned int type);

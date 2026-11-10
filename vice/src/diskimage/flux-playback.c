@@ -35,6 +35,19 @@ static unsigned int revolution(const flux_playback_t *cursor)
 
 static void seek(flux_playback_t *cursor)
 {
+    /* A measured edge exactly at the final capture endpoint belongs to the
+       loop seam. Emit it after the turn boundary, once, before replaying the
+       first interval. Do not synthesize an edge when the endpoint has none.
+       Pending state is derived from turn/phase/inclusive, including restores. */
+    if (cursor->track && cursor->state.turn && !revolution(cursor)
+        && !cursor->state.phase && cursor->state.inclusive
+        && flux_track_seek(cursor->track, flux_track_period(cursor->track), 1,
+                           &cursor->scan, &cursor->pulse)
+        && cursor->pulse == flux_track_period(cursor->track)) {
+        cursor->pulse = 0;
+        cursor->has_pulse = 2; /* Endpoint edge, followed by the first interval. */
+        return;
+    }
     cursor->has_pulse = cursor->track
         && flux_track_seek(cursor->track,
             flux_track_boundary(cursor->track, revolution(cursor)) + cursor->state.phase,
@@ -140,7 +153,11 @@ int flux_playback_advance(flux_playback_t *cursor, uint64_t ticks, unsigned int 
         seek(cursor);
     } else if (*kind & FLUX_EVENT_PULSE) {
         cursor->state.inclusive = 0;
-        cursor->has_pulse = flux_track_next(cursor->track, &cursor->scan, &cursor->pulse);
+        if (cursor->has_pulse == 2) {
+            seek(cursor);
+        } else {
+            cursor->has_pulse = flux_track_next(cursor->track, &cursor->scan, &cursor->pulse);
+        }
     }
     return FLUX_OK;
 }

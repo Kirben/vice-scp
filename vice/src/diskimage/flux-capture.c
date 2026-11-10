@@ -200,7 +200,7 @@ int flux_track_next(const flux_track_t *track, flux_scan_t *scan, uint64_t *puls
     while (scan->word < track->count) {
         if (!(scan->word % FLUX_CAPTURE_CHECKPOINT_WORDS)) {
             const flux_checkpoint_t *checkpoint = &track->checkpoints[scan->word / FLUX_CAPTURE_CHECKPOINT_WORDS];
-            if (!checkpoint->next_word || checkpoint->next_time >= flux_track_period(track)) {
+            if (!checkpoint->next_word || checkpoint->next_time > flux_track_period(track)) {
                 scan->word = track->count;
                 return 0;
             }
@@ -218,7 +218,7 @@ int flux_track_next(const flux_track_t *track, flux_scan_t *scan, uint64_t *puls
             }
             scan->time += delta;
         }
-        if (scan->time >= flux_track_period(track)) {
+        if (scan->time > flux_track_period(track)) {
             scan->word = track->count;
             return 0;
         }
@@ -234,7 +234,7 @@ int flux_track_seek(const flux_track_t *track, uint64_t time, int inclusive,
                     flux_scan_t *scan, uint64_t *pulse)
 {
     size_t lo = 0, hi, mid;
-    if (!track || !scan || !pulse || !track->count || time >= flux_track_period(track)) {
+    if (!track || !scan || !pulse || !track->count || time > flux_track_period(track)) {
         return 0;
     }
     hi = track->checkpoint_count;
@@ -256,4 +256,19 @@ int flux_track_seek(const flux_track_t *track, uint64_t time, int inclusive,
         }
     }
     return 0;
+}
+
+size_t flux_track_word_count(const flux_track_t *track)
+{
+    return track ? track->count : 0;
+}
+
+uint32_t flux_track_unit_ticks(const flux_track_t *track)
+{
+    return track ? track->unit_ticks : 0;
+}
+
+const uint16_t *flux_track_words(const flux_track_t *track)
+{
+    return track ? track->words : NULL;
 }

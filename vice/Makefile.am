@@ -27,6 +27,14 @@ COMMON_EXTRA_DIST = \
 	COPYING \
 	README-NATIVE-SCP.txt \
 	tests/native-flux/build.py \
+	tests/native-flux/build-lifecycle.py \
+	tests/native-flux/build-electronics.py \
+	tests/native-flux/electronics-hooks.c \
+	tests/native-flux/test_electronics.py \
+	tests/native-flux/test_native_drive.py \
+	tests/native-flux/test_view.py \
+	tests/native-flux/lifecycle-hooks.c \
+	tests/native-flux/test_lifecycle.py \
 	tests/native-flux/test-hooks.c \
 	tests/native-flux/test_native_flux.py \
 	NEWS

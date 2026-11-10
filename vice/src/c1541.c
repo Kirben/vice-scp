@@ -2999,6 +2999,7 @@ static int extract_cmd_common(int nargs, char **args, int geos)
     switch (disk_type) {
         case DISK_IMAGE_TYPE_G64:   /* fall through */
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
             disk_size = D64_FILE_SIZE_35 + (7 * 17 * 256);    /* 42 tracks */
             break;
         case DISK_IMAGE_TYPE_G71:

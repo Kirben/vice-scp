@@ -68,6 +68,10 @@ static int set_drive_true_emulation(int val, void *param)
     unsigned int thistde = val ? 1 : 0;
     unsigned int thisdnr = vice_ptr_to_int(param);
 
+    if (!thistde && (diskunit_context[thisdnr]->drives[0]->flux != NULL
+                    || diskunit_context[thisdnr]->drives[1]->flux != NULL)) {
+        return -1;
+    }
     DBG(("set_drive_true_emulation unit %u enabled: %u", thisdnr + 8, thistde));
 
     /* always enable TDE on both units of a drive */

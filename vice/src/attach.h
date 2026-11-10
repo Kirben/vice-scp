@@ -43,6 +43,7 @@
 #define ATTACH_DEVICE_VIRT 4 /* non-tde drive/image */
 
 struct vdrive_s;
+struct flux_capture_s;
 
 int probe_disk_image(const char *filename);
 
@@ -53,6 +54,9 @@ int file_system_cmdline_options_init(void);
 
 const char *file_system_get_disk_name(unsigned int unit, unsigned int drive);
 int file_system_attach_disk(unsigned int unit, unsigned int drive, const char *filename);
+/* Transfers an unowned sealed capture only on success. No disk file is made. */
+int file_system_attach_flux_capture(unsigned int unit, unsigned int drive,
+                                     struct flux_capture_s *capture);
 void file_system_detach_disk(unsigned int unit, unsigned int drive);
 void file_system_detach_disk_all(void);
 void file_system_detach_disk_shutdown(void);

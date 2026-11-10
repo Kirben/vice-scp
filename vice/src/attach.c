@@ -36,6 +36,8 @@
 #include "attach.h"
 #include "cmdline.h"
 #include "diskimage.h"
+#include "diskimage/fsimage.h"
+#include "drive/rotation-flux.h"
 #include "driveimage.h"
 #include "drive.h"
 #include "fsdevice.h"
@@ -610,6 +612,72 @@ int probe_disk_image(const char *filename)
     return 1;
 }
 
+static int attach_native_image(disk_image_t *image, vdrive_t *vdrive,
+                               unsigned int unit, unsigned int drive)
+{
+    int traps;
+    rotation_flux_t checked = {0};
+    drive_t *dptr;
+
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive != 0) {
+        return -1;
+    }
+    dptr = diskunit_context[unit - 8]->drives[drive];
+    if (!dptr->true_emulation || drive_check_image_format(DISK_IMAGE_TYPE_SCP, unit - 8) < 0
+        || resources_get_int_sprintf("TrapDevice%u", &traps, unit) < 0 || traps
+        || rotation_flux_bind(&checked, disk_image_flux_capture_get(image), 0) != FLUX_OK) {
+        log_error(attach_log, "SCP requires a 1541/1541-II, true-drive emulation and disabled device traps.");
+        return -1;
+    }
+    detach_disk_image_and_free(vdrive_get_image(vdrive, drive), vdrive, unit, drive);
+    if (drive_image_attach(image, unit, drive) < 0) {
+        return -1;
+    }
+    if (vdrive_attach_image(image, unit, drive, vdrive) < 0) {
+        drive_image_detach(image, unit, drive);
+        return -1;
+    }
+    return 0;
+}
+
+int file_system_attach_flux_capture(unsigned int unit, unsigned int drive,
+                                     flux_capture_t *capture)
+{
+    disk_image_t *image;
+    vdrive_t *vdrive;
+    int rc;
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive != 0
+        || !flux_capture_is_sealed(capture)) {
+        return -1;
+    }
+    vdrive = file_system_get_vdrive(unit);
+    if (vdrive == NULL || disk_image_flux_capture_get(vdrive_get_image(vdrive, drive)) == capture) {
+        return -1;
+    }
+    image = disk_image_create();
+    image->device = DISK_IMAGE_DEVICE_FS;
+    image->type = DISK_IMAGE_TYPE_SCP;
+    image->read_only = 1;
+    image->tracks = FLUX_CAPTURE_TRACKS / 2;
+    image->max_half_tracks = FLUX_CAPTURE_TRACKS;
+    image->gcr = NULL;
+    disk_image_media_create(image);
+    disk_image_fsimage_name_set(image, "Embedded native flux");
+    image->media.fsimage->flux = capture;
+    image->media.fsimage->flux_only = 1;
+    rc = attach_native_image(image, vdrive, unit, drive);
+    if (rc < 0) {
+        image->media.fsimage->flux = NULL; /* Caller retains ownership. */
+        disk_image_media_destroy(image);
+        disk_image_destroy(image);
+        return -1;
+    }
+    serial_device_type_set(SERIAL_DEVICE_VIRT, unit);
+    file_system_set_serial_hooks(unit, ATTACH_DEVICE_NONE);
+    ui_display_drive_current_image(unit - 8, drive, "Embedded native flux");
+    return 0;
+}
+
 static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
                              const char *filename, unsigned int unit,
                              unsigned int drive, int devicetype)
@@ -667,6 +735,19 @@ static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
         lib_free(new_image.p64);
         disk_image_media_destroy(&new_image);
         return -1;
+    }
+
+    if (new_image.type == DISK_IMAGE_TYPE_SCP) {
+        image = disk_image_create();
+        memcpy(image, &new_image, sizeof(*image));
+        lib_free(new_image.p64);
+        image->p64 = NULL;
+        err = attach_native_image(image, vdrive, unit, drive);
+        if (err < 0) {
+            disk_image_media_destroy(image);
+            disk_image_destroy(image);
+        }
+        return err;
     }
 
     detach_disk_image_and_free(oldimage, vdrive, unit, drive);

@@ -30,7 +30,7 @@ typedef struct flux_playback_s {
     flux_playback_state_t state;
     flux_scan_t scan;
     uint64_t pulse;
-    int has_pulse;
+    int has_pulse; /* 0: none, 1: interval edge, 2: measured capture-end edge. */
 } flux_playback_t;
 
 /* capture must be sealed and remain alive while a cursor borrows it. */
