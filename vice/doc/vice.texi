@@ -1002,6 +1002,14 @@ VICE supports the most popular Commodore file formats:
 @code{P64} lowlevel NRZI flux pulse disk image files
 
 @item
+@code{SCP} SuperCard Pro flux disk images. Enable true drive emulation and disable device traps
+for the unit, then select a drive model that matches the capture geometry
+before attaching the image. Compatible captures can be written when mounted
+writable. Eligible multi-revolution captures also require
+@code{-scpmultirevwrite}. See @file{README-NATIVE-SCP.txt} for drive geometry,
+formatting and snapshot details.
+
+@item
 @code{D67} CBM2040 (DOS1) disk image format
 
 @item

@@ -38,6 +38,18 @@ require writable MODE. For eligible multi-revolution images, set
 -scpmultirevwrite before attaching. Explicit read-only mounts take
 precedence. c1541 provides a read-only sector view of compatible SCPs.
 
+Create an SCP with Create and Attach Disk Image. Issue the emulated
+drive's format command with a disk ID, for example N0:DISK,42 on a
+1541. On the 1571 and 1571CR, send U0>M1 before formatting both sides.
+On a dual IEEE drive, select the mechanism in the format command,
+for example N1:DISK,42.
+
+Empty SCPs use the attached drive's geometry. The default MFM densities
+are DD for the 1581, HD for the FD-2000 and ED for the FD-4000. To select
+a supported alternate density, set -drive8scpblankdensity before
+attaching an empty image (0 for default, 1 for DD, 2 for HD, 3 for ED).
+Use the corresponding CMD DOS format option, such as N:DISK,42,DDN.
+
 The writer retains the sample grid, captured revolution count, declared
 track range, and original revolution payloads on untouched tracks.
 Supported metadata includes SCP 1.6 footers, the Greaseweazle 2.4 footer

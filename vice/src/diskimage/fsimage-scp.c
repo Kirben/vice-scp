@@ -654,13 +654,169 @@ int fsimage_scp_read(disk_image_t *image)
 /* Choose a geometry for an empty SCP before the drive starts formatting. */
 int fsimage_scp_prepare_blank(disk_image_t *image, unsigned int flags)
 {
-    return FLUX_INVALID;
+    fsimage_t *fs = image->media.fsimage;
+    unsigned int slot;
+    flux_capture_t *blank;
+    if (!flags || image->read_only || fs->flux_only != FSIMAGE_FLUX_FILE
+        || fs->flux_scp_disk_type != SCP_DISK_TYPE_C64) {
+        return FLUX_OK;
+    }
+    for (slot = 0; slot < FLUX_CAPTURE_MAX_TRACKS; slot++) {
+        if (flux_capture_track(fs->flux, slot)) {
+            return FLUX_OK;
+        }
+    }
+    blank = flux_capture_create(1, flags | flux_capture_flags(fs->flux));
+    if (!blank) {
+        return FLUX_NOMEM;
+    }
+    flux_capture_seal(blank);
+    fsimage_scp_dispose(image);
+    fs->flux = blank;
+    if (flags & FLUX_CAPTURE_MFM) {
+        fs->flux_scp_disk_type = SCP_DISK_TYPE_GENERIC;
+        fs->flux_scp_heads = 0;
+        image->tracks = 80;
+        image->max_half_tracks = 160;
+    } else if (flags & FLUX_CAPTURE_8X50) {
+        image->tracks = (flags & FLUX_CAPTURE_DOUBLE_SIDED) ? 154 : 77;
+        image->max_half_tracks = 154;
+        fs->flux_scp_heads = (flags & FLUX_CAPTURE_DOUBLE_SIDED) ? 0 : 1;
+    }
+    return FLUX_OK;
 }
 
 /* Build the replacement before the interface processor writes the directory. */
 int fsimage_scp_format_gcr(disk_image_t *image, unsigned int format, const uint8_t id[2])
 {
-    return FLUX_INVALID;
+    const flux_capture_t *source = disk_image_flux_capture_get(image);
+    unsigned int flags = flux_capture_flags(source);
+    int rpm360 = flux_capture_uses_360_clock(source);
+    int measured = image->media.fsimage->flux_scp_turns != NULL;
+    uint64_t duration = rpm360 ? FLUX_DEFAULT_360_TURN_TICKS
+                               : FLUX_DEFAULT_TURN_TICKS;
+    int wide = format == DISK_IMAGE_TYPE_D80 || format == DISK_IMAGE_TYPE_D82;
+    unsigned int tracks = format == DISK_IMAGE_TYPE_D82 ? 154 : wide ? 77 : 35;
+    uint64_t durations[FLUX_CAPTURE_MAX_REVS];
+    unsigned int revolutions = flux_capture_revolutions(source);
+    unsigned int rev;
+    unsigned int sample = flux_capture_sample_ticks(source) / 2;
+    flux_capture_t *capture;
+    unsigned int track;
+    int rc = FLUX_OK;
+
+    if (image->read_only || (flags & FLUX_CAPTURE_TOP_ONLY) || wide != !!(flags & FLUX_CAPTURE_8X50)
+        || (wide && (format == DISK_IMAGE_TYPE_D82) != !!(flags & FLUX_CAPTURE_DOUBLE_SIDED))) {
+        return FLUX_INVALID;
+    }
+    capture = flux_capture_create(revolutions, flags | (measured ? 0 : FLUX_CAPTURE_INDEXED)
+                                  | (rpm360 ? FLUX_CAPTURE_360_RPM : 0));
+    if (!capture) {
+        return FLUX_NOMEM;
+    }
+    for (track = 1; track <= tracks; track++) {
+        unsigned int zone = disk_image_speed_map(format, track);
+        unsigned int sectors = disk_image_sector_per_track(format, track);
+        unsigned int length = disk_image_raw_track_size(format, track);
+        unsigned int slot = wide ? ((track - 1) % 77) * 2 + (track > 77) : (track - 1) * 2;
+        unsigned int numerator = (16 - zone) * (wide ? 20 : 10) * (rpm360 ? 5 : 1);
+        unsigned int denominator = (wide ? 3 : 1) * (rpm360 ? 6 : 1);
+        const flux_track_t *existing = flux_capture_track(source, slot);
+        uint64_t period = measured ? fsimage_scp_physical_turn(image, slot) : duration;
+        uint64_t total = 0;
+        uint64_t span;
+        uint64_t base;
+        uint64_t previous = 0;
+        uint64_t capacity;
+        uint8_t *raw;
+        uint16_t *words;
+        unsigned int sector;
+        unsigned int bit;
+        unsigned int count = 0;
+        gcr_header_t header = {0, (uint8_t)track, id[1], id[0]};
+
+        if (!period || (measured && !existing)) {
+            rc = FLUX_INVALID;
+            break;
+        }
+        for (rev = 0; rev < revolutions; ++rev) {
+            durations[rev] = existing ? flux_track_duration(existing, rev) : duration;
+            if (!measured && (durations[rev] < 12000000 || durations[rev] > 18000000)) {
+                rc = FLUX_INVALID;
+                break;
+            }
+            total += durations[rev];
+        }
+        if (rc != FLUX_OK) {
+            break;
+        }
+        capacity = (length * 8 + 256) * (measured ? (total - 1) / period + 1 : revolutions);
+        if (capacity > FLUX_CAPTURE_MAX_WORDS) {
+            rc = FLUX_LIMIT;
+            break;
+        }
+        raw = lib_malloc(length);
+        words = lib_malloc((size_t)capacity * sizeof(*words));
+        memset(raw, 0x55, length);
+        for (sector = 0; sector < sectors; sector++) {
+            uint8_t data[256] = {0};
+            if (sector == 0 && track == (wide ? HDR_TRACK_8050 : 18)) {
+                memcpy(data + (wide ? HDR_ID_8050 : BAM_ID_1541), id, 2);
+            }
+            header.sector = (uint8_t)sector;
+            gcr_convert_sector_to_GCR(data, raw + (sector * length) / sectors,
+                                      &header, 8, 5, CBMDOS_FDC_ERR_OK);
+        }
+        rev = 0;
+        for (base = 0; base < total; base += span) {
+            /* A measured unindexed capture is continuous. Otherwise start
+               a new format pattern at each recorded revolution boundary. */
+            span = measured ? period : durations[rev++];
+            for (bit = 0; bit < length * 8; bit++) {
+                uint64_t offset = ((bit + 1) * numerator + denominator / 2) / denominator;
+                if (!measured) {
+                    offset = (offset * span + duration / 2) / duration;
+                }
+                if (offset * 2 > span || base + offset * 2 > total) {
+                    break;
+                }
+                if (raw[bit / 8] & (0x80 >> (bit & 7))) {
+                    uint64_t tick = (base / 2 + offset + sample / 2) / sample;
+                    uint64_t delta;
+                    if (tick <= previous) {
+                        continue;
+                    }
+                    delta = tick - previous;
+                    if (!(delta % 65536)) {
+                        --delta;
+                        --tick;
+                    }
+                    while (delta > 65535) {
+                        words[count++] = 0;
+                        delta -= 65536;
+                    }
+                    words[count++] = (uint16_t)delta;
+                    previous = tick;
+                }
+            }
+        }
+        rc = flux_capture_add_track(capture, slot, durations, words, count, sample * 2);
+        lib_free(words);
+        lib_free(raw);
+        if (rc != FLUX_OK) {
+            break;
+        }
+    }
+    if (rc == FLUX_OK) {
+        rc = flux_capture_keep_unwritten(capture, source);
+    }
+    if (rc == FLUX_OK) {
+        flux_capture_seal(capture);
+        fsimage_scp_adopt_write(image, capture);
+    } else {
+        flux_capture_destroy(capture);
+    }
+    return rc;
 }
 
 int fsimage_scp_flip_gcr(disk_image_t *image)

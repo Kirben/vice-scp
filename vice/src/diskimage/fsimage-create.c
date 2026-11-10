@@ -40,6 +40,7 @@
 #include "diskimage.h"
 #include "fsimage-create.h"
 #include "fsimage.h"
+#include "scp-writer.h"
 #include "gcr.h"
 #include "lib.h"
 #include "log.h"
@@ -592,6 +593,20 @@ static int fsimage_create_p64(disk_image_t *image)
 /*-----------------------------------------------------------------------*/
 
 
+static int fsimage_create_scp(FILE *file)
+{
+    flux_capture_t *capture = flux_capture_create(1, 0);
+    int rc;
+
+    if (capture == NULL) {
+        return -1;
+    }
+    flux_capture_seal(capture);
+    rc = scp_file_write_staged(file, capture);
+    flux_capture_destroy(capture);
+    return rc == FLUX_OK ? 0 : -1;
+}
+
 /** \brief  Create a disk image of type \a type called \a name on the host OS
  *
  * \param[in]   name    disk image name/path
@@ -647,9 +662,14 @@ int fsimage_create(const char *name, unsigned int type)
         case DISK_IMAGE_TYPE_P64:
             rc = fsimage_create_p64(image);
             break;
+        case DISK_IMAGE_TYPE_SCP:
+            rc = fsimage_create_scp(fsimage->fd);
+            break;
     }
 
-    fclose(fsimage->fd);
+    if (fclose(fsimage->fd) != 0) {
+        rc = -1;
+    }
     lib_free(fsimage->name);
     lib_free(fsimage);
     lib_free(image);
