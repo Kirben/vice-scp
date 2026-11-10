@@ -117,7 +117,8 @@ int flux_logic_advance(flux_logic_t *rptr, flux_logic_output_t *out,
                         uint64_t ticks, int byte_ready, flux_logic_sink_t sink, void *opaque)
 {
     flux_event_t event;
-    uint64_t span, cycles;
+    uint64_t span;
+    uint64_t cycles;
     unsigned int kind;
     int rc;
     if (!rptr || !out || !cursor || !reference_phase || *reference_phase >= 5 || !cursor->capture) {
@@ -168,40 +169,61 @@ int flux_logic_advance(flux_logic_t *rptr, flux_logic_output_t *out,
     }
 }
 
-int flux_logic_advance_360(flux_logic_t *rptr, flux_logic_output_t *out,
+int flux_logic_advance_scaled(flux_logic_t *rptr, flux_logic_output_t *out,
                           flux_playback_t *cursor, unsigned int *reference_phase,
                           unsigned int *source_phase, uint64_t ticks, int byte_ready,
-                          flux_logic_sink_t sink, void *opaque)
+                          flux_logic_sink_t sink, void *opaque, unsigned int numerator,
+                          unsigned int denominator)
 {
     flux_event_t event;
-    uint64_t remaining, span, clocks, source_ticks, limit;
-    unsigned int kind, next_source_phase;
+    uint64_t remaining;
+    uint64_t span;
+    uint64_t clocks;
+    uint64_t source_ticks;
+    uint64_t limit;
+    unsigned int kind;
+    unsigned int next_source_phase;
+    unsigned int reference_period;
     int rc;
-    if (!rptr || !out || !cursor || !cursor->capture || !reference_phase
-        || !source_phase || *reference_phase >= 25 || *source_phase >= 6) {
+    if (!numerator || numerator > 9 || !denominator || denominator > 5) {
         return FLUX_INVALID;
     }
-    if (!cursor->state.motor) { return FLUX_OK; }
-    if (ticks > UINT64_MAX / 5) { return FLUX_RANGE; }
-    remaining = ticks * 5;
+    reference_period = 5 * denominator;
+    if (!rptr || !out || !cursor || !cursor->capture || !reference_phase
+        || !source_phase || *reference_phase >= reference_period || *source_phase >= numerator) {
+        return FLUX_INVALID;
+    }
+    if (!cursor->state.motor) {
+        return FLUX_OK;
+    }
+    if (ticks > UINT64_MAX / denominator) {
+        return FLUX_RANGE;
+    }
+    remaining = ticks * denominator;
     for (;;) {
         rc = flux_playback_next_event(cursor, &event);
-        if (rc != FLUX_OK) { return rc; }
-        if (!remaining && event.delta) { return FLUX_OK; }
+        if (rc != FLUX_OK) {
+            return rc;
+        }
+        if (!remaining && event.delta) {
+            return FLUX_OK;
+        }
         /* Bound before multiplying an event delta: even a full-width blank
            region only advances to the next small read-circuit deadline. */
-        limit = flux_logic_limit(rptr, 40) * 25 - *reference_phase;
+        limit = flux_logic_limit(rptr, 40) * reference_period - *reference_phase;
         span = remaining < limit ? remaining : limit;
-        if (event.delta <= (span + *source_phase) / 6) {
-            span = event.delta ? event.delta * 6 - *source_phase : 0;
+        if (event.delta <= (span + *source_phase) / numerator) {
+            span = event.delta ? event.delta * numerator - *source_phase : 0;
         }
-        source_ticks = (span + *source_phase) / 6;
-        next_source_phase = (unsigned int)((span + *source_phase) % 6);
-        clocks = (span + *reference_phase) / 25;
+        source_ticks = (span + *source_phase) / numerator;
+        next_source_phase = (unsigned int)((span + *source_phase) % numerator);
+        clocks = (span + *reference_phase) / reference_period;
         rc = flux_playback_advance(cursor, source_ticks, &kind);
-        if (rc != FLUX_OK) { return rc; }
+        if (rc != FLUX_OK) {
+            return rc;
+        }
         *source_phase = next_source_phase;
-        *reference_phase = (unsigned int)((span + *reference_phase) % 25);
+        *reference_phase = (unsigned int)((span + *reference_phase) % reference_period);
         if (clocks) {
             flux_logic_clock(rptr, out, clocks, byte_ready);
             rptr->cycle_index += (uint32_t)clocks;
@@ -216,4 +238,13 @@ int flux_logic_advance_360(flux_logic_t *rptr, flux_logic_output_t *out,
             return FLUX_LOGIC_STOPPED;
         }
     }
+}
+
+int flux_logic_advance_360(flux_logic_t *rptr, flux_logic_output_t *out,
+                          flux_playback_t *cursor, unsigned int *reference_phase,
+                          unsigned int *source_phase, uint64_t ticks, int byte_ready,
+                          flux_logic_sink_t sink, void *opaque)
+{
+    return flux_logic_advance_scaled(rptr, out, cursor, reference_phase, source_phase,
+                                     ticks, byte_ready, sink, opaque, 6, 5);
 }

@@ -6,7 +6,8 @@
    Used only on head changes, not in the event loop. */
 static uint64_t map_phase(uint64_t a, uint64_t b, uint64_t divisor)
 {
-    uint64_t quotient = 0, remainder = 0;
+    uint64_t quotient = 0;
+    uint64_t remainder = 0;
     unsigned int bit = 64;
     while (bit--) {
         quotient *= 2;
@@ -59,7 +60,7 @@ int flux_playback_bind(flux_playback_t *cursor, const flux_capture_t *capture,
 {
     flux_playback_state_t state;
     if (!cursor || !flux_capture_is_sealed(capture) || !flux_capture_revolutions(capture)
-        || halftrack >= FLUX_CAPTURE_TRACKS) {
+        || halftrack >= FLUX_CAPTURE_MAX_TRACKS) {
         return FLUX_INVALID;
     }
     memset(&state, 0, sizeof(state));
@@ -69,8 +70,8 @@ int flux_playback_bind(flux_playback_t *cursor, const flux_capture_t *capture,
     state.duration = flux_track_duration(flux_capture_track(capture, halftrack), 0);
     if (!state.duration) {
         /* Fallback is in the acquisition clock domain, like real windows. */
-        state.duration = (flux_capture_flags(capture) & FLUX_CAPTURE_360_RPM)
-            ? FLUX_DEFAULT_TURN_TICKS * 5 / 6 : FLUX_DEFAULT_TURN_TICKS;
+        state.duration = flux_capture_uses_360_clock(capture)
+            ? FLUX_DEFAULT_360_TURN_TICKS : FLUX_DEFAULT_TURN_TICKS;
     }
     return flux_playback_restore(cursor, capture, &state);
 }
@@ -81,7 +82,7 @@ int flux_playback_restore(flux_playback_t *cursor, const flux_capture_t *capture
     flux_playback_t replacement;
     uint64_t expected;
     if (!cursor || !flux_capture_is_sealed(capture) || !state || !flux_capture_revolutions(capture)
-        || state->halftrack >= FLUX_CAPTURE_TRACKS || state->motor > 1
+        || state->halftrack >= FLUX_CAPTURE_MAX_TRACKS || state->motor > 1
         || state->inclusive > 1 || !state->duration || state->phase >= state->duration) {
         return FLUX_INVALID;
     }
@@ -127,6 +128,8 @@ int flux_playback_next_event(const flux_playback_t *cursor, flux_event_t *event)
 int flux_playback_advance(flux_playback_t *cursor, uint64_t ticks, unsigned int *kind)
 {
     flux_event_t event;
+    uint64_t next_phase = 0;
+    unsigned int skipped = 0;
     if (!kind || flux_playback_next_event(cursor, &event) != FLUX_OK) {
         return FLUX_INVALID;
     }
@@ -134,9 +137,16 @@ int flux_playback_advance(flux_playback_t *cursor, uint64_t ticks, unsigned int 
         *kind = FLUX_EVENT_NONE;
         return FLUX_OK;
     }
+    if (ticks == event.delta && (event.kind & FLUX_EVENT_LOOP)
+        && cursor->physical_turn && cursor->track) {
+        next_phase = flux_track_period(cursor->track) % cursor->physical_turn;
+        while (next_phase >= flux_track_duration(cursor->track, skipped)) {
+            next_phase -= flux_track_duration(cursor->track, skipped++);
+        }
+    }
     if (ticks > event.delta || ticks > UINT64_MAX - cursor->state.elapsed
         || (ticks == event.delta && (event.kind & FLUX_EVENT_TURN)
-            && cursor->state.turn == UINT64_MAX)) {
+            && cursor->state.turn >= UINT64_MAX - skipped)) {
         return FLUX_RANGE;
     }
     *kind = ticks == event.delta ? event.kind : FLUX_EVENT_NONE;
@@ -146,11 +156,12 @@ int flux_playback_advance(flux_playback_t *cursor, uint64_t ticks, unsigned int 
         cursor->state.inclusive = 1;
     }
     if (*kind & FLUX_EVENT_TURN) {
-        cursor->state.turn++;
-        cursor->state.phase = 0;
+        cursor->state.turn += 1 + skipped;
+        cursor->state.phase = next_phase;
         cursor->state.inclusive = 1;
         if (cursor->track) {
             cursor->state.duration = flux_track_duration(cursor->track, revolution(cursor));
+
         }
         seek(cursor);
     } else if (*kind & FLUX_EVENT_PULSE) {
@@ -168,7 +179,7 @@ int flux_playback_change_track(flux_playback_t *cursor, unsigned int halftrack)
 {
     const flux_track_t *track;
     uint64_t duration;
-    if (!cursor || !cursor->capture || halftrack >= FLUX_CAPTURE_TRACKS) {
+    if (!cursor || !cursor->capture || halftrack >= FLUX_CAPTURE_MAX_TRACKS) {
         return FLUX_INVALID;
     }
     if (cursor->state.halftrack == halftrack) {

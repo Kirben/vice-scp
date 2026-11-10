@@ -7,16 +7,22 @@ typedef struct flux_logic_s {
     unsigned int last_read_data;
     uint8_t last_write_data;
     int bit_counter;
-    int ue7_dcba, ue7_counter, uf4_counter;
+    int ue7_dcba;
+    int ue7_counter;
+    int uf4_counter;
     uint32_t fr_randcount;
-    int filter_counter, filter_state, filter_last_state;
+    int filter_counter;
+    int filter_state;
+    int filter_last_state;
     int so_delay;
-    uint32_t cycle_index, xorShift32;
+    uint32_t cycle_index;
+    uint32_t xorShift32;
 } flux_logic_t;
 
 typedef struct flux_logic_output_s {
     uint8_t byte;
-    unsigned int ready_edge, ready_level;
+    unsigned int ready_edge;
+    unsigned int ready_level;
     int bit; /* -1 if this clock span did not sample a bit. */
 } flux_logic_output_t;
 
@@ -36,6 +42,11 @@ int flux_logic_advance(flux_logic_t *state, flux_logic_output_t *out,
    2.5 ns subticks (0..24); source_phase is elapsed subticks within one source
    tick (0..5). Carry both across calls, motor stops, head changes and saves.
    Input ticks are physical 12.5 ns ticks. Calls beyond UINT64_MAX/5 reject. */
+int flux_logic_advance_scaled(flux_logic_t *state, flux_logic_output_t *out,
+                              flux_playback_t *cursor, unsigned int *reference_phase,
+                              unsigned int *source_phase, uint64_t ticks, int byte_ready,
+                              flux_logic_sink_t sink, void *opaque, unsigned int numerator,
+                              unsigned int denominator);
 int flux_logic_advance_360(flux_logic_t *state, flux_logic_output_t *out,
                           flux_playback_t *cursor, unsigned int *reference_phase,
                           unsigned int *source_phase, uint64_t ticks, int byte_ready,

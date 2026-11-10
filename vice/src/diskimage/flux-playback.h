@@ -30,6 +30,7 @@ typedef struct flux_playback_s {
     flux_playback_state_t state;
     flux_scan_t scan;
     uint64_t pulse;
+    uint64_t physical_turn; /* Optional continuous angle at the acquisition seam. */
     int has_pulse; /* 0: none, 1: interval edge, 2: measured capture-end edge. */
 } flux_playback_t;
 
