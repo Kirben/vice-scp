@@ -22,6 +22,12 @@ EXTRA_libdiskimage_a_SOURCES = \
 
 libdiskimage_a_SOURCES = \
 	diskimage.c \
+	flux-capture.c \
+	flux-capture.h \
+	flux-playback.c \
+	flux-playback.h \
+	scp-reader.c \
+	scp-reader.h \
 	fsimage-check.c \
 	fsimage-check.h \
 	fsimage-create.c \

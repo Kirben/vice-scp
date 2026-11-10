@@ -25,6 +25,10 @@ COMMON_EXTRA_DIST = \
 	configure.ac \
 	cmake-bootstrap.sh \
 	COPYING \
+	README-NATIVE-SCP.txt \
+	tests/native-flux/build.py \
+	tests/native-flux/test-hooks.c \
+	tests/native-flux/test_native_flux.py \
 	NEWS
 
 EXTRA_DIST = $(COMMON_EXTRA_DIST)
