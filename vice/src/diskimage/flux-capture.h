@@ -13,6 +13,8 @@
 #define FLUX_TICKS_PER_SECOND UINT64_C(80000000)
 #define FLUX_DEFAULT_TURN_TICKS UINT64_C(16000000)
 #define FLUX_CAPTURE_INDEXED 1U
+#define FLUX_CAPTURE_360_RPM 2U /* Capture device spindle, not target drive RPM. */
+#define FLUX_CAPTURE_FLAGS (FLUX_CAPTURE_INDEXED | FLUX_CAPTURE_360_RPM)
 
 typedef enum flux_result_e {
     FLUX_OK = 0,

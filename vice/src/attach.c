@@ -365,9 +365,19 @@ static int set_attach_device_readonly(int value, void *param)
     char *new_filename;
     int rc;
     int val = value ? 1 : 0;
+    disk_image_t *image;
 
     /* Do nothing if resource is unchanged. */
     if (attach_device_readonly_enabled[unit - 8][drive] == val) {
+        return 0;
+    }
+
+    image = file_system_get_image(unit, drive);
+    if (image != NULL && image->type == DISK_IMAGE_TYPE_SCP) {
+        /* SCP protection is intrinsic, independent of the preference for
+           future attachments. In particular an embedded capture has no file
+           to reopen, and a live cursor must not be reset by this setting. */
+        attach_device_readonly_enabled[unit - 8][drive] = val;
         return 0;
     }
 

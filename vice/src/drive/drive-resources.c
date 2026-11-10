@@ -43,6 +43,7 @@
 #include "iecdrive.h"
 #include "lib.h"
 #include "log.h"
+#include "rotation-flux.h"
 #include "machine.h"
 #include "machine-bus.h"
 #include "machine-drive.h"
@@ -146,6 +147,7 @@ static int set_drive_extend_image_policy(int val, void *param)
 static int drive_resources_type(int val, void *param)
 {
     unsigned int type, current;
+    unsigned int native_dnr;
     int dnr;
     int busses;
     diskunit_context_t *unit;
@@ -157,6 +159,20 @@ static int drive_resources_type(int val, void *param)
     drive = unit->drives[0];
 
     type = (unsigned int)val;
+    for (native_dnr = 0; native_dnr < NUM_DISK_UNITS; native_dnr++) {
+        diskunit_context_t *other = diskunit_context[native_dnr];
+        if (other != NULL
+            && ((other->drives[0] != NULL && other->drives[0]->flux != NULL)
+                || (other->drives[1] != NULL && other->drives[1]->flux != NULL))) {
+            if (type == unit->type) {
+                return 0;
+            }
+            /* Model changes eject images and reconfigure the shared bus.
+               Preserve all mounted native captures, including on other units. */
+            log_error(LOG_DEFAULT, "Detach all native SCP images before changing drive model on unit %u.", (unsigned int)(dnr + 8));
+            return -1;
+        }
+    }
     busses = iec_available_busses();
 
     /* a 1551 can only be device 8 or 9 */
@@ -340,6 +356,26 @@ static int set_drive_rpm(int val, void *param)
     return 0;
 }
 
+static int flux_speed_mode[NUM_DISK_UNITS];
+
+int drive_flux_speed_mode(unsigned int unit_index)
+{
+    return unit_index < NUM_DISK_UNITS ? flux_speed_mode[unit_index] : 0;
+}
+
+static int set_drive_flux_speed(int val, void *param)
+{
+    unsigned int dnr = vice_ptr_to_uint(param);
+    drive_t *drive = diskunit_context[dnr]->drives[0];
+    if (val < 0 || val > 1) { return -1; }
+    if (drive->flux && val != flux_speed_mode[dnr]) {
+        log_error(LOG_DEFAULT, "Detach native SCP from unit %u before changing capture-speed policy.", dnr + 8);
+        return -1;
+    }
+    flux_speed_mode[dnr] = val;
+    return 0;
+}
+
 static int set_drive_wobble_frequency(int val, void *param)
 {
     unsigned int dnr;
@@ -410,6 +446,8 @@ static resource_int_t res_drive[] = {
       NULL, set_drive_wobble_amplitude, NULL },
     { NULL, 1, RES_EVENT_STRICT, NULL,
       NULL, set_drive_true_emulation, NULL },
+    { NULL, 0, RES_EVENT_SAME, NULL,
+      NULL, set_drive_flux_speed, NULL },
     RESOURCE_INT_LIST_END
 };
 
@@ -459,6 +497,9 @@ int drive_resources_init(void)
         res_drive[5].name = lib_msprintf("Drive%iTrueEmulation", dnr + 8);
         res_drive[5].value_ptr = &(drive0->true_emulation);
         res_drive[5].param = vice_uint_to_ptr(dnr);
+        res_drive[6].name = lib_msprintf("Drive%iFluxSpeed", dnr + 8);
+        res_drive[6].value_ptr = &flux_speed_mode[dnr];
+        res_drive[6].param = vice_uint_to_ptr(dnr);
 
         if (has_iec) {
             res_drive_rtc[0].name = lib_msprintf("Drive%iRTCSave", dnr + 8);
@@ -473,7 +514,7 @@ int drive_resources_init(void)
             return -1;
         }
 
-        for (i = 0; i <= 5; i++) {
+        for (i = 0; i <= 6; i++) {
             lib_free(res_drive[i].name);
         }
         if (has_iec) {

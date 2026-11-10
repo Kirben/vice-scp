@@ -7,11 +7,16 @@ struct drive_s;
 
 typedef struct rotation_flux_s {
     flux_playback_t playback;
-    /* Elapsed native ticks since the last 16 MHz reference-clock edge (0..4).
+    /* Time since the last 16 MHz edge: 12.5 ns ticks at captured speed
+       (0..4), or 2.5 ns subticks with 6/5 compensation (0..24).
        Head changes preserve this value; motor-off time freezes it. */
     unsigned int reference_phase;
+    unsigned int speed; /* 5: capture clock; 6: 360 RPM capture at 300 RPM. */
+    unsigned int source_phase; /* 2.5 ns subticks within a scaled source tick. */
     int fault; /* Latched by drive dispatch on exhausted/invalid clock state. */
 } rotation_flux_t;
+/* Attachment policy: 0 auto from capture metadata, 1 captured clock. */
+int drive_flux_speed_mode(unsigned int unit_index);
 
 /* Internal drive adapter, not image attachment. The capture is borrowed and
    must remain alive. Binding does not reset the drive's electronics state. */

@@ -638,6 +638,8 @@ int rotation_flux_bind(rotation_flux_t *input, const flux_capture_t *capture,
     rc = flux_playback_bind(&input->playback, capture, halftrack);
     if (rc == FLUX_OK) {
         input->reference_phase = 0;
+        input->speed = (flux_capture_flags(capture) & FLUX_CAPTURE_360_RPM) ? 6 : 5;
+        input->source_phase = 0;
         input->fault = 0;
     }
     return rc;
@@ -722,8 +724,16 @@ int rotation_flux_advance(drive_t *dptr, rotation_flux_t *input, uint64_t ticks)
     out.ready_edge = dptr->byte_ready_edge;
     out.ready_level = dptr->byte_ready_level;
     out.bit = -1;
-    rc = flux_logic_advance(&rptr->logic, &out, &input->playback, &input->reference_phase,
-                            ticks, !!(dptr->byte_ready_active & BRA_BYTE_READY), NULL, NULL);
+    if (input->speed == 6) {
+        rc = flux_logic_advance_360(&rptr->logic, &out, &input->playback,
+                                   &input->reference_phase, &input->source_phase,
+                                   ticks, !!(dptr->byte_ready_active & BRA_BYTE_READY), NULL, NULL);
+    } else if (input->speed == 5 && !input->source_phase) {
+        rc = flux_logic_advance(&rptr->logic, &out, &input->playback, &input->reference_phase,
+                                 ticks, !!(dptr->byte_ready_active & BRA_BYTE_READY), NULL, NULL);
+    } else {
+        rc = FLUX_INVALID;
+    }
     dptr->GCR_read = out.byte;
     dptr->byte_ready_edge = out.ready_edge;
     dptr->byte_ready_level = out.ready_level;

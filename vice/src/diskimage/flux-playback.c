@@ -68,7 +68,9 @@ int flux_playback_bind(flux_playback_t *cursor, const flux_capture_t *capture,
     state.inclusive = 1;
     state.duration = flux_track_duration(flux_capture_track(capture, halftrack), 0);
     if (!state.duration) {
-        state.duration = FLUX_DEFAULT_TURN_TICKS;
+        /* Fallback is in the acquisition clock domain, like real windows. */
+        state.duration = (flux_capture_flags(capture) & FLUX_CAPTURE_360_RPM)
+            ? FLUX_DEFAULT_TURN_TICKS * 5 / 6 : FLUX_DEFAULT_TURN_TICKS;
     }
     return flux_playback_restore(cursor, capture, &state);
 }

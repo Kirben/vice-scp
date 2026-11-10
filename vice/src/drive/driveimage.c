@@ -234,6 +234,7 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
             drive->flux = lib_malloc(sizeof(*drive->flux));
         }
         *drive->flux = native_input;
+        if (drive_flux_speed_mode(dnr) == 1) { drive->flux->speed = 5; }
         drive->read_only = image->read_only = 1;
         drive->GCR_image_loaded = drive->P64_image_loaded = 0;
         drive->GCR_dirty_track = drive->P64_dirty = 0;

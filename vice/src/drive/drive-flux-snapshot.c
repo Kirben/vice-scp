@@ -1,7 +1,9 @@
 /* Native captures and playback state, independent of SCP/USB. GPL-2.0-or-later.
    FLUXu:d 1.0: embed byte, canonical capture SHA-1 (20 bytes), cursor turn,
    phase, duration, elapsed (qwords), halftrack/motor/inclusive/reference phase
-   (bytes). If embedded: revolutions/flags (dwords), then 84 track descriptors:
+   (bytes). Version 1.1 records speed and fractional source phase (bytes)
+   immediately before any embedded capture; the reference phase uses 2.5 ns
+   units when speed is 6. If embedded: revolutions/flags (dwords), then 84 track descriptors:
    presence byte, unit ticks/count (dwords), per-turn durations (qwords), and
    packed interval words. DRIVE 2.1 makes this module mandatory.
    Without embedding, the exact matching capture must already be attached. */
@@ -86,7 +88,7 @@ static flux_capture_t *capture_read(snapshot_module_t *m)
     uint16_t *words = NULL;
     flux_capture_t *capture;
     if (SMR_DW(m, &revs) < 0 || !revs || revs > FLUX_CAPTURE_MAX_REVS
-        || SMR_DW(m, &flags) < 0 || (flags & ~FLUX_CAPTURE_INDEXED)) { return NULL; }
+        || SMR_DW(m, &flags) < 0 || (flags & ~FLUX_CAPTURE_FLAGS)) { return NULL; }
     capture = flux_capture_create(revs, flags);
     if (!capture) { return NULL; }
     for (halftrack = 0; halftrack < FLUX_CAPTURE_TRACKS; halftrack++) {
@@ -135,18 +137,26 @@ int drive_flux_snapshot_write(snapshot_t *s, drive_t *drive,
     snapshot_module_t *m;
     const rotation_flux_t *input = drive->flux;
     const flux_playback_state_t *state;
-    int rc;
+    int rc, rate_state;
     if (!input || input->fault || !flux_capture_is_sealed(input->playback.capture)) { return -1; }
     state = &input->playback.state;
+    rate_state = !!(flux_capture_flags(input->playback.capture) & FLUX_CAPTURE_360_RPM);
+    if ((input->speed != 5 && input->speed != 6)
+        || (input->speed == 6 && !rate_state)
+        || input->reference_phase >= (input->speed == 6 ? 25U : 5U)
+        || input->source_phase >= (input->speed == 6 ? 6U : 1U)) { return -1; }
     capture_identity(input->playback.capture, identity);
     snprintf(name, sizeof(name), "FLUX%u:%u", unit, number);
-    m = snapshot_module_create(s, name, 1, 0);
+    m = snapshot_module_create(s, name, 1, rate_state);
     if (!m) { return -1; }
     rc = SMW_B(m, embed != 0) < 0 || SMW_BA(m, identity, sizeof(identity)) < 0
         || SMW_QW(m, state->turn) < 0 || SMW_QW(m, state->phase) < 0
         || SMW_QW(m, state->duration) < 0 || SMW_QW(m, state->elapsed) < 0
         || SMW_B(m, state->halftrack) < 0 || SMW_B(m, !!(drive->byte_ready_active & BRA_MOTOR_ON)) < 0
         || SMW_B(m, state->inclusive) < 0 || SMW_B(m, input->reference_phase) < 0;
+    if (!rc && rate_state) {
+        rc = SMW_B(m, input->speed) < 0 || SMW_B(m, input->source_phase) < 0;
+    }
     if (!rc && embed) { rc = capture_write(m, input->playback.capture); }
     if (snapshot_module_close(m) < 0) { rc = -1; }
     return rc ? -1 : 0;
@@ -156,7 +166,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
                                unsigned int unit, unsigned int number, unsigned int halftrack)
 {
     char name[16];
-    uint8_t major, minor, embed, ht, motor, inclusive, phase, expected[20], actual[20];
+    uint8_t major, minor, embed, ht, motor, inclusive, phase, speed = 5, source_phase = 0, expected[20], actual[20];
     snapshot_module_t *m;
     flux_capture_t *owned = NULL;
     const flux_capture_t *capture;
@@ -167,12 +177,15 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     snprintf(name, sizeof(name), "FLUX%u:%u", unit, number);
     m = snapshot_module_open(s, name, &major, &minor);
     if (!m) { return -1; } /* Mandatory when DRIVE 2.1 selects native flux. */
-    if (major != 1 || minor != 0 || SMR_B(m, &embed) < 0 || embed > 1
+    if (major != 1 || minor > 1 || SMR_B(m, &embed) < 0 || embed > 1
         || SMR_BA(m, expected, sizeof(expected)) < 0
         || SMR_QW(m, &state.turn) < 0 || SMR_QW(m, &state.phase) < 0
         || SMR_QW(m, &state.duration) < 0 || SMR_QW(m, &state.elapsed) < 0
         || SMR_B(m, &ht) < 0 || SMR_B(m, &motor) < 0
-        || SMR_B(m, &inclusive) < 0 || SMR_B(m, &phase) < 0 || phase >= 5) { goto done; }
+        || SMR_B(m, &inclusive) < 0 || SMR_B(m, &phase) < 0) { goto done; }
+    if (minor && (SMR_B(m, &speed) < 0 || SMR_B(m, &source_phase) < 0)) { goto done; }
+    if ((speed != 5 && speed != 6) || phase >= (speed == 6 ? 25U : 5U)
+        || source_phase >= (speed == 6 ? 6U : 1U)) { goto done; }
     state.halftrack = ht;
     state.motor = motor;
     state.inclusive = inclusive;
@@ -187,9 +200,12 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
         capture = drive->flux->playback.capture;
     }
     capture_identity(capture, actual);
-    if (memcmp(expected, actual, sizeof(actual))
+    if ((speed == 6 && !(flux_capture_flags(capture) & FLUX_CAPTURE_360_RPM))
+        || memcmp(expected, actual, sizeof(actual))
         || flux_playback_restore(&restored.playback, capture, &state) != FLUX_OK) { goto done; }
     restored.reference_phase = phase;
+    restored.speed = speed;
+    restored.source_phase = source_phase;
     if (snapshot_module_close(m) < 0) { m = NULL; goto done; }
     m = NULL;
     if (embed) {

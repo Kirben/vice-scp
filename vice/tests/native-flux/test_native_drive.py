@@ -8,6 +8,13 @@ parser.add_argument('--runtime',required=True,type=Path)
 parser.add_argument('--reference-runtime',type=Path)
 parser.add_argument('--legacy-snapshot',type=Path)
 parser.add_argument('--disk-tool',type=Path,help='c1541 fixture generator (defaults to RUNTIME/c1541.exe)')
+parser.add_argument('--multiunit-only',action='store_true',help='Run generated two-unit native capture/snapshot tests')
+parser.add_argument('--multirev-only',action='store_true',help='Run generated multi-revolution and disk-replacement checks')
+parser.add_argument('--capture-speed-only',action='store_true',help='Run generated 360 RPM playback and speed snapshot checks')
+parser.add_argument('--blank-turn-only',action='store_true',help='Diagnose native blank-turn loading with DOS status and independent timing oracles')
+parser.add_argument('--blank-turn-case',action='append',help='Select a named blank-turn diagnostic case (repeatable)')
+parser.add_argument('--blank-turn-trace',action='store_true',help='Trace verified 1541-II ROM sync success/timeout checkpoints')
+parser.add_argument('--pulse-fixture-tool',type=Path,help='Exact 200 ms SCP-to-P64 diagnostic exporter (requires --reference-runtime)')
 args=parser.parse_args()
 app=args.runtime.resolve();out=args.output.resolve()
 out.mkdir(parents=True,exist_ok=False)
@@ -67,12 +74,13 @@ idle=out/'idle.prg';idle.write_bytes(b'\x01\x08'+ram)
 results={}
 
 class Session:
- def __init__(self,name,disk=image,pristine=False,program=idle,model=1542):
+ def __init__(self,name,disk=image,pristine=False,program=idle,model=1542,additional_disks=None,remote_monitor=False,flux_speed=None):
   self.directory=out/name;self.directory.mkdir(exist_ok=True)
   self.log=self.directory/'vice.log'
   if self.log.exists():self.log.unlink()
   self.request=0
   self.events=[]
+  self.checkpoint_hits=[]
   with socket.socket() as allocator:
    allocator.bind(('127.0.0.1',0));port=allocator.getsockname()[1]
   runtime=args.reference_runtime.resolve() if pristine else app
@@ -81,7 +89,15 @@ class Session:
     '-logfile',self.log,'-attach8ro','-drive8type',str(model),'-drive8truedrive','+trapdevice8',
     '+autostart-handle-tde','-autostart-delay','0','-limitcycles','600000000',
     '-autostartprgmode','1','-autostart',program]
+  if flux_speed is not None:argv+=['-drive8fluxspeed',str(flux_speed)]
   if disk is not None:argv+=['-8',disk]
+  if remote_monitor:
+   with socket.socket() as allocator:
+    allocator.bind(('127.0.0.1',0));self.remote_port=allocator.getsockname()[1]
+   argv+=['-remotemonitor','-remotemonitoraddress',f'127.0.0.1:{self.remote_port}']
+  for unit,extra_disk in (additional_disks or {}).items():
+   argv+=['-attach%dro'%unit,'-drive%dtype'%unit,'1542','-drive%dtruedrive'%unit,'+trapdevice%d'%unit]
+   if extra_disk is not None:argv+=['-%d'%unit,extra_disk]
   self.process=subprocess.Popen([str(x) for x in argv],cwd=self.directory,env=env,
     stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
   self.connection=None
@@ -123,7 +139,8 @@ class Session:
     header=read(12);length,=struct.unpack_from('<I',header,2)
     assert length<10000000
     kind,payload=header[6],read(length)
-   if kind==0x62 and (address is None or struct.unpack('<H',payload)[0]==address):return
+   if kind==0x11 and len(payload)==23 and payload[4]:self.checkpoint_hits.append(payload)
+   if kind==0x62 and (address is None or struct.unpack('<H',payload)[0]==address):return struct.unpack('<H',payload)[0]
  def save(self,name,embed):
   path=self.directory/name;raw=path.as_posix().encode()
   rc,_=self.command(0x41,bytes([0,embed,len(raw)])+raw);assert rc==0,rc
@@ -147,6 +164,26 @@ class Session:
   if self.process.poll() is None:
    try:self.process.wait(timeout=3)
    except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=10)
+
+if args.capture_speed_only:
+ from test_capture_speed import run
+ run(Session,out,image,success,env,app)
+ raise SystemExit(0)
+
+if args.blank_turn_only:
+ from test_blank_turn import run
+ run(Session,out,image,success,basic,env,app,args.blank_turn_case,args.blank_turn_trace,args.pulse_fixture_tool)
+ raise SystemExit(0)
+
+if args.multirev_only:
+ from test_multirev import run
+ run(Session,out,image,success,basic,env,app)
+ raise SystemExit(0)
+
+if args.multiunit_only:
+ from test_multiunit import run
+ run(Session,out,image,success,basic,env,app,args.disk_tool)
+ raise SystemExit(0)
 
 before=hashlib.sha256(image.read_bytes()).hexdigest()
 for model in [1541, 1542]:
@@ -246,9 +283,21 @@ try:
  resource=b'Drive8TrueEmulation'
  rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,0]))
  assert rc!=0,'native image silently switched to virtual drive playback'
+ results['disabling_true_drive_rejected']=True
+ resource=b'TrapDevice8'
+ rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,1]))
+ assert rc!=0,'native image silently switched to virtual device traps'
+ assert 'Native SCP requires disabled device traps for unit 8.' in session.log.read_text(errors='replace')
+ results['enabling_device_traps_rejected']=True
+ resource=b'TrapDevice9'
+ rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,1]));assert rc==0
+ rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,0]));assert rc==0
+ results['other_unit_traps_remain_configurable']=True
+ resource=b'AttachDevice8d0Readonly'
+ rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,0]));assert rc==0
  session.load_program()
  results['dos_write_protect_26']=True
- results['disabling_true_drive_rejected']=True
+ results['dos_write_protected_with_writable_attachment_preference']=True
 finally:session.close()
 assert hashlib.sha256(image.read_bytes()).hexdigest()==before
 print('Native DOS write protection and true-drive guard passed.',flush=True)
@@ -258,6 +307,33 @@ def module(data,name):
  size,=struct.unpack_from('<I',data,start+18)
  assert size>=22 and start+size<=len(data)
  return start,start+22,start+size
+
+session=Session('native-preference-file')
+try:
+ original=session.save('before.vsf',0).read_bytes();_,p0,e0=module(original,'FLUX8:0')
+ resource=b'AttachDevice8d0Readonly'
+ for value in [0,1,0,1]:
+  rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,value]));assert rc==0
+  checked=session.save('after-%d.vsf'%value,0).read_bytes();_,p1,e1=module(checked,'FLUX8:0')
+  assert original[p0:e0]==checked[p1:e1], 'attachment preference reset native capture/cursor'
+ session.load_program()
+ results['native_preference_preserves_file_capture_state_and_load']=True
+finally:session.close()
+
+session=Session('native-model-settings')
+try:
+ original=session.save('before.vsf',0).read_bytes()
+ resource=b'Drive8Type'
+ for model in [1542,1541,1581,1571,0,1542]:
+  rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([2,model&255,model>>8]))
+  assert (rc==0)==(model==1542), 'model change unexpectedly accepted/rejected'
+  checked=session.save('model-%d.vsf'%model,0).read_bytes()
+  for name in ['FLUX8:0','DRIVE8']:
+   _,p0,e0=module(original,name);_,p1,e1=module(checked,name)
+   assert original[p0:e0]==checked[p1:e1], 'model setting altered mounted native state'
+ session.load_program()
+ results['native_model_settings_preserve_capture_circuit_and_load']=True
+finally:session.close()
 
 session=Session('snapshot-save')
 try:
@@ -294,6 +370,12 @@ try:
  assert session.restore(active)==0
  checked=session.save('active-roundtrip.vsf',1).read_bytes();_,pc,ec=module(checked,'FLUX8:0')
  assert active_data[pa:ea]==checked[pc:ec]
+ resource=b'AttachDevice8d0Readonly'
+ for value in [0,1]:
+  rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,value]));assert rc==0
+  toggled=session.save('active-preference-%d.vsf'%value,1).read_bytes();_,pt,et=module(toggled,'FLUX8:0')
+  assert active_data[pa:ea]==toggled[pt:et], 'preference changed active native cursor'
+ results['native_preference_preserves_active_transfer']=True
  session.load_program(None)
  results['mid_transfer_snapshot_exact_state_and_load']=True
 finally:session.close()
@@ -315,6 +397,19 @@ try:
   roundtrip=session.save('embedded-roundtrip.vsf',1).read_bytes()
   _,pr,er=module(roundtrip,'FLUX8:0')
   assert raw[payload:end]==roundtrip[pr:er]
+  resource=b'AttachDevice8d0Readonly'
+  for value in [0,1,0,1]:
+   rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([1,value]));assert rc==0
+   checked=session.save('preference-%d.vsf'%value,1).read_bytes();_,ps,es=module(checked,'FLUX8:0')
+   assert raw[payload:end]==checked[ps:es], 'preference lost or reset embedded capture'
+  results['native_preference_preserves_embedded_capture_offline_and_load']=True
+  resource=b'Drive8Type'
+  for model in [1542,1581]:
+   rc,_=session.command(0x52,bytes([1,len(resource)])+resource+bytes([2,model&255,model>>8]))
+   assert (rc==0)==(model==1542)
+   checked=session.save('model-%d.vsf'%model,1).read_bytes();_,pm,em=module(checked,'FLUX8:0')
+   assert raw[payload:end]==checked[pm:em], 'model selection lost embedded native image'
+  results['native_model_settings_preserve_embedded_capture_offline']=True
   session.load_program()
   results['embedded_restore_without_source_and_load']=True
  finally:session.close()

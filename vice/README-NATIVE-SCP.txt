@@ -1,251 +1,218 @@
-Native SCP implementation: read-only drive and sector-view preview
-=================================================
+Native read-only SCP playback: Windows development preview
+=========================================================
 
+Source base: VICE-Team/svn-mirror
+Commit: 8e45817287033b36112f6925a89d9f9c953a0cc8
 Branch: native-scp-playback
-Base: 8e45817287033b36112f6925a89d9f9c953a0cc8
+This is a custom development build, not an official VICE release. The first
+milestone remains incomplete pending frontend verification and wider coverage.
 
-Implemented
------------
-* A sealed, provider-neutral flux_capture_t storing host-endian packed
-  intervals and exact per-turn durations. It has no P64, USB or filesystem
-  dependency. Capture ownership stays with the caller; a playback cursor
-  borrows it and must be destroyed/unbound before the capture is released.
-* A read-only scp_file_read(FILE *, ...) adapter with checked signature,
-  offsets, lengths, checksums, MODE constraints, footer strings and legacy
-  164/166-entry tables. It publishes nothing on an error and never writes.
-* The low-level VICE filesystem-image adapter now recognizes SCP before
-  size-based probes, owns/disposes its capture and opens it through MODE_READ
-  even when writable attachment was requested. Recognized invalid SCP cannot
-  fall through to D64 probing. Native write entry points reject SCP by type.
-* A native flux_playback_t scheduler using integer 12.5 ns ticks, with no
-  angular normalization. Source timing is preserved independently of the
-  16 MHz electronics adapter. Turn/index metadata is not an emulated
-  1541 index signal.
-* Distinct captured turns, including the first uncued window, overflow carry,
-  exact boundary events, an explicit capture-loop seam, motor freeze/resume,
-  and deterministic head stepping between tracks with unequal durations.
-* Snapshot-ready integer cursor state and validated, atomic reconstruction.
-* Sparse seek checkpoints and next-edge indexing bound stream scanning even
-  across long overflow-only gaps. No allocation or I/O occurs while advancing
-  the cursor. Zero-delay boundary pulses are consumed exactly once.
-* Shared 1541 read-side limit/clock helpers extracted from rotation_1541_p64.
-  P64 retains its input/weak-pulse handling, write path and circuit ordering.
-  The native rotation_flux_t adapter feeds that same filter, counters, RNG,
-  sync and byte-ready circuit from exact captured transition timestamps.
-* Independent reference-clock phase across catch-up partitions and head
-  changes. All intervening transitions reach the filter, including multiple
-  pulses between reference clocks. At an exact tie, the circuit clock runs
-  before the flux transition, matching P64's ordering. Motor off freezes both
-  timelines. A measured edge at the capture endpoint is retained at the loop
-  seam; a seam without such an edge does not invent one.
-* Explicit unbind removes borrowed capture pointers before owner cleanup.
-  Advancing the adapter performs no allocation or I/O and consumes all turns.
-* Drive-owned native contexts, CPU-clock/bus-delay accounting, head stepping,
-  motor edges, reset and shutdown are connected to normal drive dispatch.
-  Native time bypasses synthetic RPM/wobble and P64's skipped-turn catch-up.
-  SCP attachment requires true-drive 1541/1541-II with device traps disabled.
-  Unsupported attachment is rejected before replacing the current disk.
-* Native media sensing reports a present, permanently write-protected disk.
-  A real KERNAL SAVE attempt reports DOS 26 (WRITE PROTECT ON). Turning off
-  true-drive emulation is rejected while a native image is attached.
-* Required native snapshots: DRIVE 2.1 selects mandatory FLUX<unit>:0 1.0;
-  other drives keep DRIVE 2.0. Captures serialize independently of SCP/P64,
-  with exact cursor/reference-clock and existing circuit/bus-delay state.
-  Embedded restoration creates an owned in-memory image, never an SCP file.
-  Nonembedded restoration requires the identical capture already attached,
-  checked with a canonical SHA-1 identity. It does not reopen a filename or
-  read a hardware device. Missing/mismatched captures fail explicitly.
-
-Current scope / limits
-----------------------
-Native read-only file attachment and 1541 playback are enabled in x64sc.
-This is a development preview; the complete first milestone is not finished.
-Native SCP autostart, filesystem directory previews and c1541 read/extract
-are enabled. Attachment/autostart still requires a 1541/1541-II, true-drive
-emulation enabled and device traps disabled. AutostartHandleTrueDriveEmulation
-may be enabled or disabled: native loading always uses the live drive circuit.
-GTK attach/smart-attach disk filters now include SCP with any letter case.
-That frontend change is source-reviewed only: this toolchain has no GTK headers.
-SDL's file picker already lists all files and needs no extension filter change.
-P64's extracted circuit behavior is checked against pristine upstream code.
-Read-only input keeps feeding the read circuit if a write gate is asserted;
-physical write-encoder behavior is outside this internal read-side adapter.
-
-The parser accepts C64 single-sided 16-bit captures through track 42.5;
-generic/other media and top-side/two-sided layouts are rejected. Source files
-are limited to 1 GiB and retained packed intervals to 32 million words (64 MB,
-plus checkpoints/descriptors and a temporary per-track input buffer). Images
-marked writable are still read-only input; there is no SCP writer.
-
-Each track's captured turn times are independent observations. Head changes
-preserve turn count and map fractional angular phase into the destination
-turn once. They cannot recover unknown cross-track alignment. Absent tracks
-keep the most recent turn duration; binding initially to an absent track uses
-an explicit 200 ms fallback. Finite captures loop; missing physical weak-bit
-variation is not invented.
-
-The source adapter cannot report a full-signature match until all three SCP
-magic bytes are available; a shorter prefix is a nonmatch. A recognized but
-malformed SCP returns an error. Scans/cursors must use validated API state;
-the borrowing capture must outlive them.
-
-Validation
-----------
-73 native Windows tests compile the actual production modules with strict
-warnings, and inject allocation/read/seek failures. The suite includes 100
-random captures compared against an independent timestamp oracle, random
-catch-up partitions, 1,000 deterministic parser mutations, full-width integer
-phase mapping and allocation accounting. This Windows run is not sanitized.
-Tests use generated data only and require no VICE/P64 build or hardware SDK.
-
-18 additional native Windows integration tests compile the actual diskimage,
-filesystem lifecycle, format probes and SCP adapter with instrumented platform
-services. They verify handle modes, failure cleanup, legacy D64 open policy,
-write rejection and malformed-SCP probe ordering. They require a configured
-VICE build for platform headers. Example (SDL headers may need --include-dir):
-  python tests/native-flux/build-lifecycle.py OUTPUT --configured-build BUILD --cc GCC
-
-23 circuit tests compile actual modified rotation.c and untouched upstream
-rotation.c into separate native libraries. They compare 3,388 P64 read/write,
-wrap and CPU/bus-delay trace points; native input is checked against individual
-upstream reference clocks through 60 randomized, partitioned input scenarios.
-Known GCR bytes, sync and byte-ready decode at all four density settings with
-three input clock phases. Motor pause, head phase, overflow gaps, endpoint
-retention/restoration and ownership are also covered, along with CPU dispatch,
-bus delays, motor edges, long catch-up and reset.
-21 independent sector-view checks additionally cover checksums, invalid GCR,
-missing sectors/tracks, all density zones, extended tracks, capture-boundary
-wrapping, multiple revolutions, cache reuse and allocation failure cleanup.
-The lifecycle builder also runs these checks. Lower-level total: 135 checks.
-  python tests/native-flux/build-electronics.py OUTPUT --configured-build BUILD --cc GCC
-The builder extracts the pinned upstream reference from git, or accepts
---reference-rotation PATH. These tests require configured VICE headers but no
-emulator UI or hardware SDK. GCC static analysis passes rotation.c and the
-modified capture/cursor modules. This Windows run is not sanitizer-enabled.
-
-A native integration link also used real VICE zfile/platform services and
-confirmed that its SCP handle rejects fwrite on generated data. D64/G64/P64
-true-drive load and utility extraction regressions passed, as did D64/G64
-snapshot restoration. The upstream P64 snapshot version mismatch remains.
-A subsequent clean native Windows build compiled x64sc and c1541 from a new
-source copy and an initially empty build directory. No baseline objects were
-reused. GCC 16.2.0/MinGW and SDL2 were used, without WSL. Build-copy scripts and
-vice.texi needed LF line endings for upstream generators. The monitor library
-and Windows resource target were built explicitly, and reSID-fp's static
-archive was made directly from fresh objects to work around a libtool mismatch.
-This builds the x64sc/c1541 targets, not every VICE machine or the GTK frontend.
-
-Generated-disk acceptance tests exercise actual KERNAL LOAD on 1541 and
-1541-II, DOS write protection, embedded restoration with no source file,
-external-capture identity, active-transfer snapshot continuation, rejection by
-an old upstream executable, malformed required state and legacy restoration.
-Run on Windows with a runtime containing x64sc, ROMs and DLLs:
-  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME
-Optional: --disk-tool C1541 --reference-runtime PRISTINE --legacy-snapshot VSF
-The output directory must be new. Fixtures are generated there; user images
-are never used by these tests. These checks do not establish compatibility
-with every protected disk or a real SuperCard Pro device.
-
-Run from this directory:
-  python tests/native-flux/build.py OUTPUT --cc PATH_TO_MINGW_GCC
-On Linux with GCC/Clang:
-  python3 tests/native-flux/build.py OUTPUT --sanitize
-
-scp_file_read returns FLUX_OK (0), SCP_FILE_NOT_MATCHED (1), or a negative
-flux_result_t. Callers must compare explicitly, not use a truthy probe check.
-On failure, the output capture is NULL and the caller retains FILE ownership.
-The capture builder copies its input arrays and rejects mutation after sealing.
-
-Next integration steps
-----------------------
-Complete interactive directory-selection verification and GTK frontend
-testing. Then complete real-capture regression,
-performance and a clean Windows build for the first milestone. Hardware
-acquisition remains a later adapter feeding the same capture contract.
-
-Manual launch (Windows example)
--------------------------------
-  x64sc.exe -default -drive8type 1542 -drive8truedrive +trapdevice8 +autostart-handle-tde -attach8ro -8 "disk.scp"
-At the C64 prompt:
+Using the Windows preview
+-------------------------
+Extract the whole package and retain its supplied ROMs and DLLs.
+Drag an SCP image onto Autostart-SCP-readonly.bat, or run:
+  x64sc.exe -default -drive8type 1542 -drive8truedrive +trapdevice8 -attach8ro -autostart "disk.scp"
+To attach without autostart, replace -autostart with -8, then use:
   LOAD "*",8,1
   RUN
-Native SCP remains read-only regardless of the writable-attachment preference.
+1541-II uses model number 1542; the original 1541 uses 1541.
+Earlier real-capture checks reached program screens for Ghostbusters, KickButt
+Side 3, Robots of Dawn and Music Studio. Music Studio was verified with:
+  x64sc.exe -default -model c64ntsc -drive8type 1541 -drive8truedrive +trapdevice8 -attach8ro -autostart "disk.scp"
+These checks did not verify full gameplay or every protection check.
 
-Independent DOS sector view
----------------------------
-flux_view_t borrows the sealed capture and owns private playback/read-circuit
-state and a lazy per-track sector cache. It cannot advance the live drive.
-It accepts valid GCR headers/data with matching track/sector and checksums;
-the first valid captured copy wins, and later revolutions can recover earlier
-bad copies. Read errors leave the caller's sector buffer unchanged. This is
-a utility view of ordinary DOS sectors, not a replacement for native playback
-of protected tracks. The scan is bounded to 400 ms per captured window plus
-one loop for seam-spanning blocks; unobserved tails reset the block parser.
-Images with longer windows can play natively even if this view misses sectors.
-No write operation is implemented. Snapshot-owned captures also support the
-view without needing an open file handle.
+Configure every drive model before mounting native media. Units 8 through 11,
+drive 0, support native SCP on 1541/1541-II. Two-unit tests cover units 8 and 9.
+True-drive emulation must be enabled and that unit's device traps disabled.
+The default capture-speed policy expands 360 RPM SCP timing by 6/5 for the
+nominal 300 RPM 1541. The file and its captured flux are unchanged. To play a
+flagged image at its captured clock instead, use -drive8fluxspeed 1 before
+attachment (0 restores automatic selection). Detach before changing policy.
+AutostartHandleTrueDriveEmulation can be on or off; actual SCP loading always
+uses the live emulated drive, not virtual-sector loading or RAM injection.
 
-Windows generated-image acceptance additionally verifies SCP wildcard
-autostart on both supported models with automatic TDE handling on/off, and
-directory listing/extraction that matches the source PRG byte-for-byte.
-The original/generated SCP hash remains unchanged throughout the tests.
+Protection and settings
+-----------------------
+SCP is permanently read-only in this implementation. Sector/track write APIs
+reject it, its file handle is read-only, and an actual SAVE reports DOS 26.
+The attachment read-only preference only affects future attachments when SCP
+is mounted; toggling it preserves the capture, cursor and active transfer.
+The SDL drive-settings menu includes "SCP media: Read only" for mounted SCP.
+Changing the current unit's true-drive setting to off, or enabling its virtual
+traps, is rejected while native SCP is mounted. Selecting the current model
+is harmless. Actual model changes on ANY unit require all native images to be
+detached first, because hardware changes reconfigure the shared IEC bus.
 
-Autostart example (Windows)
---------------------------
-  x64sc.exe -default -drive8type 1542 -drive8truedrive +trapdevice8 -attach8ro -autostart "disk.scp"
+The c1541 utility provides a private DOS-sector view, for example:
+  c1541.exe -attach "disk.scp" -list
+  c1541.exe -attach "disk.scp" -read "program" "program.prg"
+It validates GCR headers/data and checksums, selecting the first valid copy
+across captured turns. It owns separate read-circuit/cursor state and cannot
+advance a running drive. Read errors leave the destination sector unchanged.
+This ordinary-sector view does not replace native playback of protected data.
+Its scan is bounded to 400 ms per captured window plus a loop for seam-spanning
+blocks. Longer captures can play natively even if the utility misses sectors.
 
-Clean Windows preview verification
----------------------------------
-The clean executables passed the generated-image native acceptance suite,
-including directory-index selection/autostart of SUCCESS, wildcard autostart
-on both models with automatic TDE handling on/off, exact utility extraction,
-true-drive LOAD, DOS 26 write protection and native snapshot checks. Legacy
-D64/G64/P64 LOAD/extraction and D64/G64 snapshot checks passed. The previously
-identified upstream P64 snapshot version mismatch still returns error 143.
+Snapshots
+----------
+Native drives use DRIVE 2.1 with a required FLUX<unit>:0 module. Version 1.1
+stores the selected speed and fractional phase for 360 RPM captures; ordinary
+captures retain 1.0. Older 1.0 snapshots still restore at their captured clock.
+Other drives retain their legacy format. Older readers reject unknown states.
+Embedded snapshots own restored in-memory captures; no SCP file is created or
+reopened. Without embedding, the identical capture must already be attached,
+verified by its canonical SHA-1 identity. Missing, swapped or inconsistent
+required state returns an error. Captures remain read-only after restoration.
+Tests cover exact per-unit state, restoration during active loading, source
+files unavailable, two mounted captures, and detaching one without losing the
+other. Malformed/unsupported SCP and invalid directory selection cannot fall
+through to PRG/tape/snapshot autostart after disk rejection.
 
-The SDL window booted to BASIC READY, but the desktop helper did not reliably
-deliver keyboard input/capture the menu. Interactive directory selection is
-therefore unverified. Its production directory-index/autostart backend passed
-through the binary monitor. No user images were opened or written this stage.
+Native architecture and supported inputs
+----------------------------------------
+SCP is parsed into a sealed, provider-neutral flux_capture_t with packed
+intervals, sparse seek checkpoints and original per-turn durations. A separate
+flux_playback_t advances exact integer 12.5 ns timestamps into the shared
+1541 read electronics, sampled on its 16 MHz clock. A 360 RPM hint selects
+exact 6/5 wall-time expansion, retaining fractional phase across updates,
+head changes, motor stops and snapshots. It does not fit each turn to a fixed
+duration, erase jitter, or convert to P64. The private DOS sector view uses
+the same automatic speed correction. Drive advancement does no allocation
+or file I/O.
+The image owns its capture; drive cursors are unbound before owner cleanup.
+The capture/cursor modules have no USB or hardware SDK dependency. Future
+SuperCard Pro acquisition can provide the same data contract; no hardware
+access or unused hardware framework is included in this milestone.
 
-Reproducing the native build
----------------------------
+Supported: C64, single-sided/side 0, 16-bit captures through track 42.5, including
+the historical HEADS=0 encoding and validated short 164/166-entry tables.
+Other-media, top-side/two-sided layouts are rejected. Source limits are 1 GiB
+and 32 million packed words, plus checkpoints/descriptors and a temporary
+per-track buffer. Signature, offsets, sizes, checksum, MODE and footer metadata
+are checked. A full SCP signature is authoritative even with another extension.
+The parser distinguishes nonmatch, valid and recognized-invalid input.
+
+Captured turns retain their measured timing, including uncued first windows
+and overflow carry. Finite captures loop; unrecorded weak-bit variation is not
+invented. A real edge at the endpoint appears once at the loop seam; no edge
+is synthesized at an empty seam. Motor-off freezes playback. Head changes
+preserve turn count and map fractional phase to the target track once; unknown
+cross-track alignment cannot be reconstructed. Missing tracks use the most
+recent duration, or the nominal acquisition period when initially absent
+(200 ms at 300 RPM, about 166.67 ms at 360 RPM before compensation).
+The timestamp precision is not a claim of 12.5 ns analog decoder accuracy.
+Read-side circuitry keeps receiving captured input if the write gate is set;
+physical write-encoder behavior and SCP writing are outside this milestone.
+
+Reproducible validation
+-----------------------
+Run from the source's vice directory with MinGW GCC on Windows:
+  python tests/native-flux/build.py OUTPUT --cc PATH_TO_GCC
+  python tests/native-flux/build-lifecycle.py OUTPUT --configured-build BUILD --cc PATH_TO_GCC --include-dir PATH_TO_SDL2_HEADERS
+  python tests/native-flux/build-electronics.py OUTPUT --configured-build BUILD --cc PATH_TO_GCC
+These run 73 core, 18 filesystem lifecycle, 23 sector-view and 25 circuit checks
+(139 total). Circuit tests compare production behavior against the bundled,
+hash-verified pristine upstream rotation.c; no Git history is needed. A custom
+--reference-rotation path must contain that same pinned file. Core tests include
+fault injection, independent timestamp oracles and parser mutations. Circuit
+checks compare P64 behavior, clock partitions, all density zones and dispatch.
+These Windows tests are not sanitizer-enabled.
+
+For generated-disk emulator tests, supply a runtime with ROMs/DLLs and c1541:
+  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME
+  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME --multiunit-only
+  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME --multirev-only
+  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME --capture-speed-only
+Output directories must be new. Fixtures are generated there, never user disks.
+The main suite accepts --reference-runtime PRISTINE and --legacy-snapshot VSF.
+It checks actual KERNAL LOAD/SAVE, autostart, snapshot round-trips, rejected
+input/settings, model guards, preferences and continued operation after errors.
+The two-unit suite uses distinct payloads and clears each expected destination
+before LOAD. It checks offline embedded restoration, active unit-9 snapshots,
+capture identities, per-unit detachment and shared-bus model protection.
+The multi-revolution suite builds continuous interval streams across index
+boundaries, including overflow carry, two good turns and three unequal-duration
+turns. It checks both 1541 models, exact extraction, capture replacement on the
+same unit, and external/embedded multi-turn snapshots with offline sources.
+An additional adverse fixture alternates a completely blank turn with a good
+turn. Its sector view recovers the program, while native KERNAL LOAD outcomes
+are recorded separately in multirev-observations.json, not counted as passes.
+The capture-speed suite checks generated 360 RPM media, both drive ROM models,
+the captured-clock override, and active/offline snapshot resumption with an
+exact nonzero fractional phase. Invalid speed/phase fields are rejected.
+For firmware-level diagnostics use --blank-turn-only, optionally selecting a
+case with repeated --blank-turn-case NAME. --blank-turn-trace verifies the
+1541-II ROM bytes before tracing sync success/timeouts. Trace cursor snapshots
+are observations at the deferred monitor stop, not exact checkpoint timestamps.
+The diagnostic records KERNAL A/carry, DOS status and exact loaded bytes.
+Cases containing "bounded" use a 200 ms total timeline. Compile the optional
+tests/native-flux/scp-p64-fixture.c with upstream src/lib/p64/p64.c and configured
+headers, then pass --pulse-fixture-tool TOOL --reference-runtime PRISTINE to
+compare these cases against upstream P64. The exporter requires exact 16 MHz
+positions and a 200 ms period; it performs no timing normalization. Selecting
+both NAME and NAME-p64 checks their KERNAL/DOS/payload results agree.
+
+test_real_captures.py NEW_OUTPUT --source INPUT_DIRECTORY --runtime RUNTIME
+copies every SCP first and SHA-256 verifies it before any emulator test. Only
+those read-only copies are passed to c1541/x64sc, and original/copy hashes are
+checked afterwards. Its screenshots require human inspection: "Autostart:
+Done" can follow an aborted loader and does not itself prove a successful boot.
+
+Building a fresh native Windows executable
+------------------------------------------
 Use an MSYS2 MinGW64 shell with GCC, SDL2/SDL2_image, zlib, iconv, autotools,
-flex/bison and the upstream build prerequisites installed. In a private source
-copy, convert *.sh, *.sed, *.awk and doc/vice.texi from CRLF to LF if needed.
-Run autogen.sh, create an empty sibling build directory, and configure with:
-  ../SOURCE/configure --enable-sdl2ui --disable-arch --without-libcurl --disable-pdf-docs --disable-html-docs
-Then, from the build directory:
+flex/bison and the usual upstream build prerequisites. No WSL is needed.
+In a private source copy, normalize *.sh, *.sed, *.awk and doc/vice.texi to LF
+if the checkout uses CRLF; upstream generators need those line endings.
+Run ./autogen.sh, then configure from a new sibling build directory:
+  ../SOURCE/configure --enable-sdl2ui --disable-arch --without-libcurl --disable-pdf-docs --disable-html-docs --disable-dependency-tracking
+An optional configure cache is usable only with the unchanged toolchain and
+environment. It does not replace compilation of any emulator objects.
+From the build directory:
+  make -j4 -C src infocontrib.h
   make -j4 -C src/lib/linenoise-ng
   make -j4 -C data/common x64sc.res
   make -j4 -C src/lib/libresidfp
-If libresidfp.a is missing while its objects exist (the observed toolchain case):
+If the toolchain creates only the sound DLL/import library, make its static
+archive directly from those freshly compiled objects:
   (cd src/lib/libresidfp; ar crs src/.libs/libresidfp.a src/libresidfp_la-*.o src/resample/libresidfp_la-*.o src/residfp/libresidfp_la-*.o)
-Build the executables, keeping the freshly assembled sound archive:
+Then build the executables, retaining that archive:
   make -j4 -C src -o ../src/lib/libresidfp/src/.libs/libresidfp.a x64sc.exe
-  make -j4 c1541
-No objects or archives from a different emulator build are required.
+  make -j4 -C src c1541.exe
+No objects/archives from another emulator build are required. These targets
+build x64sc/c1541, not every VICE machine or the GTK frontend.
 
-Rejected SCP autostart
-----------------------
-The complete SCP signature is authoritative during autodetection. If its disk
-validation, native attachment or directory selection fails, autostart returns
-an error rather than falling through to tape/snapshot/PRG detection. The guard
-reads the signature through a read-only zfile handle, so it does not depend on
-the filename extension. Full validation remains in the disk-image adapter.
-Failure also clears saved autostart settings without injecting virtual-drive
-state. Ordinary non-SCP program/disk loading keeps the existing detection path.
+Known limits and remaining work
+-------------------------------
+* Interactive SDL directory selection and visual inspection of the media
+  indicator remain unverified: the desktop helper returned another app's
+  image for the VICE window, so automated UI input was stopped.
+* GTK attach/smart-attach SCP filters are implemented but not built/tested.
+* Capture-speed compensation trusts the 360 RPM header hint. It cannot infer
+  a mislabelled acquisition clock or reconstruct uncaptured angular alignment.
+  Use captured-clock mode for a flagged file that already has nominal timings.
+* Wider gameplay, later loading stages, disk swaps and multi-revolution real
+  captures still need compatibility coverage. Initial screens are not proof
+  of full-disk readability or support for every copy-protection scheme.
+  The nine-image 360 RPM run reached program screens for Cauldron, Ghostbusters,
+  Kick Butt, Murder, Robots of Dawn and The Untouchables with PAL/1541-II.
+  Rambo II reached its instructions on a longer PAL/1541-II run. Jaws reached
+  its side-2 prompt using -model c64ntsc -drive8type 1541; its other side is
+  needed to continue. Ghetto Blaster has not reached a playable screen.
+* Whole blank turns can cause a genuine DOS 21 no-sync error despite successful
+  sector-view salvage. The 1541-II firmware limits each sync search to about
+  20 ms. Native/pristine P64 comparisons agree for identical 200 ms timelines:
+  5/10 ms blank gaps load; a 20 ms gap reports DOS 21. The full 200 ms blank
+  window and real-pulse resumption also match the pristine circuit over two
+  loops. Playback keeps blank intervals; it does not select a good turn to
+  bypass firmware errors. These diagnostics do not prove every adverse image
+  must fail or exhaustively validate real hardware behavior.
+* A hot drive-model-change load stall was reproduced in pristine upstream
+  with generated G64 images. The native guard prevents that reconfiguration
+  while SCP is mounted; it does not change legacy-only model-switch behavior.
+* The upstream P64 snapshot writer/reader version mismatch still returns 143.
+  D64/G64 snapshots and all three legacy LOAD/extraction regressions pass.
+* Native SCP writes and physical SuperCard Pro access are separate milestones.
 
-Regression checks reproduce the previous malformed-SCP-as-PRG acceptance and
-verify rejection of malformed, truncated and unsupported captures plus invalid
-directory-index selection. They compare the mounted native capture/cursor
-snapshot before/after failure and then load a program from that same disk.
-The full generated-disk native acceptance and legacy regression suites pass.
-The updated executable recompiles autostart.c and relinks against the earlier
-clean Windows build's objects; it is not another empty-directory rebuild.
-
-The updated desktop helper was retried for interactive SDL directory selection.
-It still returned another application's image while identifying the window as
-VICE, including after window recovery. UI input was stopped. That UI check and
-the GTK frontend remain unverified. Generated test disks only were used here;
-no original user captures were accessed this stage.
+Keep original preservation images untouched and use working copies for manual
+testing. Automated checks in the current build stage use generated disks only.

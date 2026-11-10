@@ -361,9 +361,11 @@ class NativeTests(unittest.TestCase):
 
     def test_360_rpm_flag_keeps_measured_period(self):
         cap = self.load(scp({0: [(6666667, [3, 4])]}, flags=5))
+        self.assertEqual(flags(cap), 3)  # Indexed and acquisition spindle metadata.
         cursor = self.cursor(cap)
         self.assertEqual(cursor.state.duration, 13333334)
         self.assertEqual(self.run_ticks(cursor, 13333334), [(6, 1), (14, 1), (13333334, 6)])
+        self.assertEqual(self.cursor(cap, 1).state.duration, 13333333)
 
     def test_long_run_has_no_per_interval_rounding_drift(self):
         cap = self.build_capture({0: ([1001, 997], [1, 500, 501, 400], 1)})
@@ -462,7 +464,7 @@ class NativeTests(unittest.TestCase):
     def test_builder_invalid_revolution_counts(self):
         for count in [0, 256, 0xffffffff]:
             self.assertFalse(create(count, 1))
-        self.assertFalse(create(1, 2))
+        self.assertFalse(create(1, 4))
 
     def test_builder_rejects_duplicate_track(self):
         cap = self.build_capture({0: ([1000], [], 1)}, sealed=False)

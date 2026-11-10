@@ -3,6 +3,7 @@
 Requires the configured native VICE build's headers. No emulator UI is used.
 """
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -23,10 +24,16 @@ if Path(a.cc).is_absolute():
     env['PATH'] = str(Path(a.cc).parent) + os.pathsep + env.get('PATH', '')
 if a.reference_rotation:
     reference = a.reference_rotation.resolve()
+elif (source / 'tests/native-flux/reference/rotation.c').exists():
+    reference = source / 'tests/native-flux/reference/rotation.c'
 else:
     reference = out / 'upstream-rotation.c'
     reference.write_bytes(subprocess.check_output(['git', 'show',
         '8e45817287033b36112f6925a89d9f9c953a0cc8:vice/src/drive/rotation.c'], cwd=source))
+expected = 'f8b10a8d383294d5357e769bb6fa91393c4ee28ac4f5bf629c1a187364ba55e9'
+actual = hashlib.sha256(reference.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+if actual != expected:
+    raise SystemExit('Circuit reference is not the pinned pristine rotation.c: ' + str(reference))
 includes = [a.configured_build.resolve() / 'src'] + [source / ('src/' + n) for n in
     ['', 'drive', 'diskimage', 'core/rtc', 'lib/p64']] + a.include_dir
 flags = ['-std=c11', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-sign-compare',

@@ -140,7 +140,8 @@ int scp_file_read(FILE *file, flux_capture_t **capture)
         }
         if (checksum != le32(header + 12)) { return FLUX_INVALID; }
     }
-    result = flux_capture_create(header[5], (header[8] & 1) ? FLUX_CAPTURE_INDEXED : 0);
+    result = flux_capture_create(header[5], ((header[8] & 1) ? FLUX_CAPTURE_INDEXED : 0)
+                                 | ((header[8] & 4) ? FLUX_CAPTURE_360_RPM : 0));
     if (!result) { return FLUX_NOMEM; }
     for (track = 0; track < SCP_TRACKS; track++) {
         offset = le32(table + track * 4);

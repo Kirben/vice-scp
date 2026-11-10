@@ -164,6 +164,7 @@ void electronics_wobble(int rpm, int amplitude)
 }
 void electronics_unbind(void) { rotation_flux_unbind(&input); }
 int electronics_step(unsigned int halftrack) { return flux_playback_change_track(&input.playback, halftrack); }
+unsigned int electronics_rate(void) { return (input.speed << 8) | input.source_phase; }
 void electronics_motor(int motor) { flux_playback_set_motor(&input.playback, motor); }
 void electronics_flux_state(flux_playback_state_t *state, unsigned int *phase)
 {
@@ -186,6 +187,9 @@ int electronics_invalid(unsigned int which)
         case 1: return rotation_flux_advance(&drive, NULL, 1);
         case 2: broken.reference_phase = 5; break;
         case 3: broken.playback.capture = NULL; break;
+        case 4: broken.source_phase = 6; break;
+        case 5: broken.speed = 7; break;
+        case 6: broken.reference_phase = 25; break;
         default: return rotation_flux_bind(NULL, NULL, 0);
     }
     return rotation_flux_advance(&drive, &broken, 1);

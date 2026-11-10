@@ -50,6 +50,7 @@ class Circuit:
                 ('restore', C.c_int, [PTR, C.POINTER(State), U32]),
                 ('invalid', C.c_int, [U32])]:
                 setattr(self, name, api(self.lib, 'electronics_' + name, result, *args))
+            self.rate = api(self.lib, 'electronics_rate', U32)
 
     def values(self):
         out = (U64 * 32)()
@@ -113,8 +114,8 @@ class ElectronicsTests(unittest.TestCase):
         for capture in self.captures:
             destroy(capture)
 
-    def capture(self, durations, pulses, unit=2, halftrack=0):
-        capture = create(len(durations), 1)
+    def capture(self, durations, pulses, unit=2, halftrack=0, flags=1):
+        capture = create(len(durations), flags)
         self.assertTrue(capture)
         self.captures.append(capture)
         self.add_track(capture, halftrack, durations, pulses, unit)
@@ -261,6 +262,69 @@ class ElectronicsTests(unittest.TestCase):
         self.same(native=True)
         state, phase = new.position()
         self.assertEqual((state.turn, state.phase, phase), (300, 1, 1))
+
+    def test_360_rpm_rational_clock_matches_independent_subtick_oracle(self):
+        rng = random.Random(360300)
+        durations = [1001, 997]
+        pulses = sorted(set([25, 50, 997, 1001, 1997] + rng.sample(range(1, 1998), 120)))
+        capture = self.capture(durations, pulses, unit=1, flags=3)
+        for zone in range(4):
+            old.init(9182, zone, 1)
+            new.init(9182, zone, 1)
+            self.assertEqual(new.bind(capture, 0), 0)
+            self.assertEqual(new.rate(), 6 << 8)
+            previous = 0
+            for ticks in [1, 1, 1, 2, 5, 19, 500, 317, 4001, 1, 701, 77]:
+                end = previous + ticks * 5  # Independent 2.5 ns wall clock.
+                events = [(at, 0) for at in range((previous // 25 + 1) * 25, end + 1, 25)]
+                period = sum(durations) * 6
+                for loop in range(previous // period, end // period + 1):
+                    events += [(loop * period + pulse * 6, 1) for pulse in pulses
+                               if previous < loop * period + pulse * 6 <= end]
+                for _, kind in sorted(events):
+                    old.pulse() if kind else old.p64_clocks(1)
+                self.assertEqual(new.advance(ticks), 0)
+                self.same(native=True)
+                state, phase = new.position()
+                self.assertEqual(state.elapsed, end // 6)
+                self.assertEqual(phase, end % 25)
+                self.assertEqual(new.rate(), (6 << 8) | (end % 6))
+                previous = end
+            before = bytes(new.position()[0]), new.position()[1], new.rate(), new.values()
+            new.motor(0)
+            self.assertEqual(new.advance(1000000), 0)
+            self.assertEqual((new.position()[0].elapsed, new.position()[1], new.rate()),
+                             (previous // 6, previous % 25, (6 << 8) | previous % 6))
+            new.motor(1)
+            for invalid in [4, 5, 6]:
+                self.assertEqual(new.invalid(invalid), -1)
+            self.assertEqual(new.advance((1 << 64) - 1), -5)
+            self.assertEqual((bytes(new.position()[0]), new.position()[1], new.rate(), new.values()), before)
+            old.finish()
+            new.finish()
+
+    def test_full_blank_turn_and_real_pulse_resumption_match_upstream(self):
+        # A complete 200 ms blank window, then an independently scheduled
+        # pulse train. The reference receives real transitions explicitly;
+        # its empty P64 track is only a clock source, with no image conversion
+        # or angular normalization. Check resumption and a second loop too.
+        blank, period = 16000000, 32000000
+        pulses = [blank + bit * 280 for bit in range(1, 801) if bit % 5 != 0]
+        capture = self.capture([blank, blank], pulses)
+        old.init(9182, 2, 1)
+        new.init(9182, 2, 1)
+        self.assertEqual(new.bind(capture, 0), 0)
+        previous = 0
+        for loop in range(2):
+            for target in [loop * period + blank] + [loop * period + p for p in pulses] + [(loop + 1) * period]:
+                delta = target - previous
+                self.assertEqual(delta % 5, 0)
+                old.p64_clocks(delta // 5)
+                if target - loop * period in pulses:
+                    old.pulse()
+                self.assertEqual(new.advance(delta), 0)
+                self.same(native=True)
+                previous = target
 
     def test_native_edge_exactly_at_capture_end_is_retained(self):
         capture = self.capture([1000], [200, 600, 1000])

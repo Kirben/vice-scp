@@ -148,8 +148,8 @@ static void decode_track(flux_view_t *view, unsigned int track, unsigned int sec
     block_reader_t reader = {0};
     flux_scan_t scan;
     uint64_t pulse, duration, window;
-    unsigned int turn, phase = 0, zone = (track < 31) + (track < 25) + (track < 18);
-    int rc;
+    unsigned int turn, phase = 0, source_phase = 0, zone = (track < 31) + (track < 25) + (track < 18);
+    int rc, truncated, scaled = !!(flux_capture_flags(view->capture) & FLUX_CAPTURE_360_RPM);
     memset(cache->error, CBMDOS_IPE_READ_ERROR_BNF, sizeof(cache->error));
     cache->decoded = 1;
     if (!raw || !flux_track_seek(raw, 0, 1, &scan, &pulse)) { return; }
@@ -160,11 +160,21 @@ static void decode_track(flux_view_t *view, unsigned int track, unsigned int sec
     circuit_reset(&logic, &out, &reader, zone);
     if (flux_playback_bind(&cursor, view->capture, (track - 1) * 2) != FLUX_OK) { return; }
     for (turn = 0; turn <= flux_capture_revolutions(view->capture); turn++) {
-        duration = cursor.state.duration;
-        window = duration < VIEW_MAX_WINDOW ? duration : VIEW_MAX_WINDOW;
-        rc = flux_logic_advance(&logic, &out, &cursor, &phase, window, 0, sector_bit, &reader);
+        duration = cursor.state.duration - cursor.state.phase;
+        if (scaled) {
+            /* Round only the request boundary; the adapter carries the exact
+               fraction into the next window. Keep the same wall-time limit. */
+            truncated = duration > (VIEW_MAX_WINDOW * 5 + source_phase) / 6;
+            window = truncated ? VIEW_MAX_WINDOW : (duration * 6 - source_phase + 4) / 5;
+            rc = flux_logic_advance_360(&logic, &out, &cursor, &phase, &source_phase,
+                                        window, 0, sector_bit, &reader);
+        } else {
+            truncated = duration > VIEW_MAX_WINDOW;
+            window = truncated ? VIEW_MAX_WINDOW : duration;
+            rc = flux_logic_advance(&logic, &out, &cursor, &phase, window, 0, sector_bit, &reader);
+        }
         if (rc == FLUX_LOGIC_STOPPED || rc < 0) { break; }
-        if (duration > window) {
+        if (truncated) {
             /* Never concatenate a decoded block across an unobserved tail. */
             flux_playback_state_t next = {0};
             next.turn = cursor.state.turn + 1;
@@ -172,7 +182,7 @@ static void decode_track(flux_view_t *view, unsigned int track, unsigned int sec
             next.motor = next.inclusive = 1;
             next.duration = flux_track_duration(raw, (unsigned int)(next.turn % flux_capture_revolutions(view->capture)));
             if (flux_playback_restore(&cursor, view->capture, &next) != FLUX_OK) { break; }
-            phase = 0;
+            phase = source_phase = 0;
             circuit_reset(&logic, &out, &reader, zone);
         }
     }

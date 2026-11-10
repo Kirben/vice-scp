@@ -33,6 +33,14 @@ COMMON_EXTRA_DIST = \
 	tests/native-flux/test_electronics.py \
 	tests/native-flux/test_native_drive.py \
 	tests/native-flux/test_view.py \
+	tests/native-flux/test_multiunit.py \
+	tests/native-flux/test_multirev.py \
+	tests/native-flux/test_blank_turn.py \
+	tests/native-flux/test_capture_speed.py \
+	tests/native-flux/scp-p64-fixture.c \
+	tests/native-flux/test_real_captures.py \
+	tests/native-flux/reference/rotation.c \
+	tests/native-flux/reference/README.txt \
 	tests/native-flux/lifecycle-hooks.c \
 	tests/native-flux/test_lifecycle.py \
 	tests/native-flux/test-hooks.c \

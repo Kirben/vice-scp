@@ -31,4 +31,13 @@ void flux_logic_clock(flux_logic_t *state, flux_logic_output_t *out,
 int flux_logic_advance(flux_logic_t *state, flux_logic_output_t *out,
                         flux_playback_t *cursor, unsigned int *reference_phase,
                         uint64_t ticks, int byte_ready, flux_logic_sink_t sink, void *opaque);
+/* 360 RPM acquisition played at nominal 300 RPM: exact 6/5 physical time.
+   Capture intervals remain immutable. In this path reference_phase is in
+   2.5 ns subticks (0..24); source_phase is elapsed subticks within one source
+   tick (0..5). Carry both across calls, motor stops, head changes and saves.
+   Input ticks are physical 12.5 ns ticks. Calls beyond UINT64_MAX/5 reject. */
+int flux_logic_advance_360(flux_logic_t *state, flux_logic_output_t *out,
+                          flux_playback_t *cursor, unsigned int *reference_phase,
+                          unsigned int *source_phase, uint64_t ticks, int byte_ready,
+                          flux_logic_sink_t sink, void *opaque);
 #endif

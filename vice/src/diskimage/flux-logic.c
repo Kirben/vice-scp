@@ -167,3 +167,53 @@ int flux_logic_advance(flux_logic_t *rptr, flux_logic_output_t *out,
         }
     }
 }
+
+int flux_logic_advance_360(flux_logic_t *rptr, flux_logic_output_t *out,
+                          flux_playback_t *cursor, unsigned int *reference_phase,
+                          unsigned int *source_phase, uint64_t ticks, int byte_ready,
+                          flux_logic_sink_t sink, void *opaque)
+{
+    flux_event_t event;
+    uint64_t remaining, span, clocks, source_ticks, limit;
+    unsigned int kind, next_source_phase;
+    int rc;
+    if (!rptr || !out || !cursor || !cursor->capture || !reference_phase
+        || !source_phase || *reference_phase >= 25 || *source_phase >= 6) {
+        return FLUX_INVALID;
+    }
+    if (!cursor->state.motor) { return FLUX_OK; }
+    if (ticks > UINT64_MAX / 5) { return FLUX_RANGE; }
+    remaining = ticks * 5;
+    for (;;) {
+        rc = flux_playback_next_event(cursor, &event);
+        if (rc != FLUX_OK) { return rc; }
+        if (!remaining && event.delta) { return FLUX_OK; }
+        /* Bound before multiplying an event delta: even a full-width blank
+           region only advances to the next small read-circuit deadline. */
+        limit = flux_logic_limit(rptr, 40) * 25 - *reference_phase;
+        span = remaining < limit ? remaining : limit;
+        if (event.delta <= (span + *source_phase) / 6) {
+            span = event.delta ? event.delta * 6 - *source_phase : 0;
+        }
+        source_ticks = (span + *source_phase) / 6;
+        next_source_phase = (unsigned int)((span + *source_phase) % 6);
+        clocks = (span + *reference_phase) / 25;
+        rc = flux_playback_advance(cursor, source_ticks, &kind);
+        if (rc != FLUX_OK) { return rc; }
+        *source_phase = next_source_phase;
+        *reference_phase = (unsigned int)((span + *reference_phase) % 25);
+        if (clocks) {
+            flux_logic_clock(rptr, out, clocks, byte_ready);
+            rptr->cycle_index += (uint32_t)clocks;
+        }
+        /* Preserve the established clock-before-pulse ordering at ties. */
+        if (kind & FLUX_EVENT_PULSE) {
+            rptr->filter_state ^= 1;
+            rptr->filter_counter = 0;
+        }
+        remaining -= span;
+        if (clocks && out->bit >= 0 && sink && sink(opaque, (unsigned int)out->bit)) {
+            return FLUX_LOGIC_STOPPED;
+        }
+    }
+}

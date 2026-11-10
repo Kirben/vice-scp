@@ -1104,6 +1104,12 @@ UI_MENU_DEFINE_STRING(Drive9FixedSize)
 UI_MENU_DEFINE_STRING(Drive10FixedSize)
 UI_MENU_DEFINE_STRING(Drive11FixedSize)
 
+static UI_MENU_CALLBACK(scp_media_status_callback)
+{
+    disk_image_t *image = file_system_get_image(vice_ptr_to_int(param), 0);
+    return image && image->type == DISK_IMAGE_TYPE_SCP ? "Read only" : "Not attached";
+}
+
 /* CAUTION: the position of the menu items is hardcoded in uidrive_menu_create() */
 
 #define DRIVE_SETTINGS_OFFSET_DRIVE_D1_R0  12
@@ -1177,6 +1183,11 @@ UI_MENU_DEFINE_STRING(Drive11FixedSize)
 /* 19 */{   .string   = "Save Drive " #x" CMD RTC data",                        \
             .type     = MENU_ENTRY_RESOURCE_TOGGLE,                             \
             .callback = toggle_Drive##x##RTCSave_callback },                    \
+/* 20 */SDL_MENU_ITEM_SEPARATOR,                                                \
+/* 21 */{   .string   = "SCP media",                                            \
+            .type     = MENU_ENTRY_OTHER,                                       \
+            .callback = scp_media_status_callback,                              \
+            .data     = (ui_callback_data_t)(x) },                              \
         SDL_MENU_LIST_END                                                       \
     };
 

@@ -28,7 +28,7 @@ def sector(payload, track=1, sector=0, header_bad=False, data_bad=False, symbol_
     return '1' * 40 + block(header) + '0101' * 18 + '1' * 40 + encoded + '0101' * 20
 
 
-def capture(turns, track=1, rotate=0, duration=None):
+def capture(turns, track=1, rotate=0, duration=None, capture360=False):
     zone = int(track < 31) + int(track < 25) + int(track < 18)
     bit_ticks = (16 - zone) * 20
     words = []
@@ -44,6 +44,8 @@ def capture(turns, track=1, rotate=0, duration=None):
             if bit != '1':
                 continue
             at = elapsed + (i + 1) * bit_ticks
+            if capture360:
+                at = (at * 5 + 3) // 6
             delta = at - previous
             while delta > 65535:
                 words.append(0)
@@ -51,8 +53,9 @@ def capture(turns, track=1, rotate=0, duration=None):
             words.append(delta)
             previous = at
         elapsed += length
-        durations.append(length)
-    cap = core.create(len(turns), 1)
+        durations.append(((elapsed * 5 + 3) // 6 - ((elapsed - length) * 5 + 3) // 6)
+                         if capture360 else length)
+    cap = core.create(len(turns), 3 if capture360 else 1)
     assert cap
     assert core.add(cap, (track - 1) * 2, (core.U64 * len(turns))(*durations),
                     (C.c_uint16 * len(words))(*words), len(words), 1) == 0
@@ -60,9 +63,9 @@ def capture(turns, track=1, rotate=0, duration=None):
     return cap
 
 
-def check(name, turns, expected=0, payload=None, track=1, read_track=None, sector_no=0, rotate=0, duration=None):
+def check(name, turns, expected=0, payload=None, track=1, read_track=None, sector_no=0, rotate=0, duration=None, capture360=False):
     core.reset()
-    cap = capture(turns, track, rotate, duration)
+    cap = capture(turns, track, rotate, duration, capture360)
     view = view_create(cap)
     assert view
     buffer = (C.c_ubyte * 256)(*([0xA5] * 256))
@@ -83,6 +86,8 @@ other = bytes([0x42]) * 256
 good = sector(payload)
 check('valid_and_cached', [good], payload=payload)
 check('wrap_across_capture_origin', [good], payload=payload, rotate=900)
+check('scaled_360_wrap_across_capture_origin', [good], payload=payload, rotate=900, capture360=True)
+check('scaled_360_later_good_turn', [sector(other, data_bad=True), good], payload=payload, capture360=True)
 check('bad_header_checksum', [sector(payload, header_bad=True)], expected=27)
 check('bad_data_checksum', [sector(payload, data_bad=True)], expected=23)
 check('invalid_gcr_symbol', [sector(payload, symbol_bad=True)], expected=24)

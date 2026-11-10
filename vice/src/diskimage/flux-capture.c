@@ -32,7 +32,7 @@ flux_capture_t *flux_capture_create(unsigned int revolutions, unsigned int flags
 {
     flux_capture_t *capture;
     if (!revolutions || revolutions > FLUX_CAPTURE_MAX_REVS
-        || (flags & ~FLUX_CAPTURE_INDEXED)) {
+        || (flags & ~FLUX_CAPTURE_FLAGS)) {
         return NULL;
     }
     capture = calloc(1, sizeof(*capture));

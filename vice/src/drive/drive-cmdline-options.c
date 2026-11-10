@@ -84,6 +84,9 @@ static cmdline_option_t cmd_drive[] =
     { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NONE,
       NULL, NULL, NULL, (void *)0,
       NULL, "Disable hardware-level emulation of disk drive" },
+    { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, NULL, NULL,
+      "<mode>", "Set native flux speed (0: auto 360-to-300 RPM, 1: captured clock; detach before changing)" },
     CMDLINE_LIST_END
 };
 
@@ -182,6 +185,8 @@ int drive_cmdline_options_init(void)
         cmd_drive[7].name = lib_msprintf("+drive%itruedrive", dnr + 8);
         cmd_drive[7].resource_name
             = lib_msprintf("Drive%iTrueEmulation", dnr + 8);
+        cmd_drive[8].name = lib_msprintf("-drive%ifluxspeed", dnr + 8);
+        cmd_drive[8].resource_name = lib_msprintf("Drive%iFluxSpeed", dnr + 8);
 
         if (has_iec) {
             cmd_drive_rtc[0].name = lib_msprintf("-drive%irtcsave", dnr + 8);
@@ -198,7 +203,7 @@ int drive_cmdline_options_init(void)
             return -1;
         }
 
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 9; i++) {
             lib_free(cmd_drive[i].name);
             lib_free(cmd_drive[i].resource_name);
         }
