@@ -33,8 +33,8 @@ track 18.5. A mount using this alignment override is write protected.
 Writing and formatting
 ----------------------
 
-Use an uncompressed, writable working copy. Single-revolution images
-require writable MODE. For eligible multi-revolution images, set
+Use a writable working copy as an uncompressed SCP or a gzip-compressed SCP.
+Single-revolution images require writable MODE. For eligible multi-revolution images, set
 -scpmultirevwrite before attaching. Explicit read-only mounts take
 precedence. c1541 provides a read-only sector view of compatible SCPs.
 
@@ -62,7 +62,8 @@ geometry.
 
 Detach the disk or exit normally to publish changes. If publication
 cannot proceed safely, VICE retains the backing file and reports the
-recovery image path when one can be created.
+recovery image path when one can be created. Gzip images are recompressed
+before replacement. A recovery image from a gzip mount is a plain SCP.
 
 Snapshots
 ---------

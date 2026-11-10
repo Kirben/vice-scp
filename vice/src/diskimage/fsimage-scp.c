@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#include <zlib.h>
 #ifdef WINDOWS_COMPILE
 #include <windows.h>
 #endif
@@ -46,6 +47,33 @@ static int file_identity(FILE *file, uint8_t identity[20])
     }
     SHA1Final(identity, &context);
     return 0;
+}
+
+/* Check the decompressed stream against the bytes currently at the backing
+   path. Publication uses the fingerprint of the compressed backing file. */
+static int backing_identity(const fsimage_t *fs, FILE *plain, uint8_t identity[20], int gzip)
+{
+    uint8_t decoded[20];
+    uint8_t checked[20];
+    FILE *stream;
+    int matches;
+
+    if (file_identity(plain, identity) || file_identity(fs->fd, decoded)) {
+        return -1;
+    }
+    if (!gzip) {
+        return memcmp(identity, decoded, sizeof(decoded));
+    }
+    stream = zfile_fopen(fs->name, "rb");
+    if (!stream) {
+        return -1;
+    }
+    matches = zfile_is_gzip(stream) && !file_identity(stream, checked)
+        && !memcmp(decoded, checked, sizeof(decoded));
+    if (zfile_fclose(stream) || !matches || file_identity(plain, checked)) {
+        return -1;
+    }
+    return memcmp(identity, checked, sizeof(checked));
 }
 
 /* Bound quantization to a quarter of the shortest encoded cell. At
@@ -128,11 +156,11 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
 {
     fsimage_t *fs = image->media.fsimage;
     uint8_t header[16];
-    uint8_t identity[20];
     uint8_t wrsp[SCP_WRSP_EXTENSION_SIZE];
     int has_wrsp = 0;
     FILE *plain;
     int enabled;
+    int gzip;
     unsigned int slot;
     unsigned int flags = flux_capture_flags(fs->flux);
     int rpm360 = flux_capture_uses_360_clock(fs->flux);
@@ -187,9 +215,8 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
     if (!plain) {
         return;
     }
-    enabled = !file_identity(plain, identity)
-        && !file_identity(fs->fd, fs->flux_file_identity)
-        && !memcmp(identity, fs->flux_file_identity, sizeof(identity));
+    gzip = zfile_is_gzip(fs->fd);
+    enabled = !backing_identity(fs, plain, fs->flux_file_identity, gzip);
     fclose(plain);
     if (!enabled) {
         return;
@@ -266,6 +293,7 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
     zfile_fclose(fs->fd);
     fs->fd = NULL;
     fs->flux_only = FSIMAGE_FLUX_FILE;
+    fs->flux_scp_gzip = gzip;
     memcpy(fs->flux_scp_range, header + 6, sizeof(fs->flux_scp_range));
     fs->flux_scp_flags = header[8] & 0x0f; /* Index, TPI, RPM and normalization. */
     fs->flux_scp_heads = header[10];
@@ -443,6 +471,39 @@ static int write_stage(const fsimage_t *fs, FILE *file, uint8_t identity[20], in
     return result;
 }
 
+static int gzip_stage(const char *raw_path, FILE *stage, uint8_t identity[20])
+{
+    FILE *raw = fopen(raw_path, "rb");
+    unsigned char buffer[8192];
+    size_t count;
+    int fd;
+    int result = -1;
+    gzFile gzip;
+
+    if (!raw) {
+        return -1;
+    }
+    fd = dup(fileno(stage));
+    if (fd >= 0) {
+        gzip = gzdopen(fd, "wb");
+        if (gzip) {
+            while ((count = fread(buffer, 1, sizeof(buffer), raw)) != 0) {
+                if (gzwrite(gzip, buffer, (unsigned int)count) != (int)count) {
+                    break;
+                }
+            }
+            result = count || ferror(raw) ? -1 : 0;
+            if (gzclose(gzip) != Z_OK) {
+                result = -1;
+            }
+        } else {
+            close(fd);
+        }
+    }
+    fclose(raw);
+    return result ? result : file_identity(stage, identity);
+}
+
 int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
 {
     fsimage_t *fs = image->media.fsimage;
@@ -450,6 +511,7 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
     uint8_t staged_identity[20];
     char *base;
     char *stage = NULL;
+    char *compressed = NULL;
     FILE *file;
     FILE *original;
     int same_directory;
@@ -500,7 +562,22 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
     }
 
     result = -1;
+    if (same_directory && !fs->flux_write_failed && layout_ok && fs->flux_scp_gzip) {
+        FILE *packed;
+        base = lib_msprintf("%s.vice-gzip", fs->name);
+        packed = open_stage(base, &compressed);
+        lib_free(base);
+        if (packed) {
+            layout_ok = !gzip_stage(stage, packed, staged_identity);
+            if (fclose(packed)) {
+                layout_ok = 0;
+            }
+        } else {
+            layout_ok = 0;
+        }
+    }
     if (same_directory && !fs->flux_write_failed && layout_ok) {
+        const char *publish = compressed ? compressed : stage;
         original = fopen(fs->name, "r+b");
         if (original != NULL) {
             int unchanged = !file_identity(original, identity)
@@ -508,15 +585,24 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
             fclose(original);
             if (unchanged) {
 #ifdef WINDOWS_COMPILE
-                result = MoveFileExA(stage, fs->name,
+                result = MoveFileExA(publish, fs->name,
                                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : -1;
 #else
-                result = archdep_rename(stage, fs->name);
+                result = archdep_rename(publish, fs->name);
 #endif
             }
         }
     }
 
+    if (compressed) {
+        if (result == 0) {
+            archdep_remove(stage);
+        }
+        else {
+            archdep_remove(compressed);
+        }
+        lib_free(compressed);
+    }
     fs->flux_dirty = 0;
     fs->flux_write_failed = 0;
     if (result != 0) {

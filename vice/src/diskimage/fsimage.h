@@ -68,6 +68,7 @@ typedef struct fsimage_s {
     uint8_t flux_scp_heads;
     uint8_t flux_scp_disk_type;
     uint8_t flux_scp_range[2];
+    uint8_t flux_scp_gzip;
 } fsimage_t;
 
 

@@ -1093,6 +1093,18 @@ static int handle_close(zfile_t *ptr)
     return 0;
 }
 
+int zfile_is_gzip(FILE *stream)
+{
+    zfile_t *entry;
+
+    for (entry = zfile_list; entry != NULL; entry = entry->next) {
+        if (entry->stream == stream) {
+            return entry->type == COMPR_GZIP;
+        }
+    }
+    return 0;
+}
+
 void zfile_set_read_only(FILE *stream)
 {
     zfile_t *entry;
