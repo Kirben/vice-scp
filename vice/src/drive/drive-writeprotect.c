@@ -28,6 +28,8 @@
 
 #include "drive-writeprotect.h"
 #include "drive.h"
+#include "../diskimage/fsimage-scp.h"
+#include "rotation-flux.h"
 #include "types.h"
 
 
@@ -62,9 +64,8 @@ uint8_t drive_writeprotect_sense(drive_t *dptr)
     }
 
     if (dptr->flux != NULL) {
-        /* Native captures are present and permanently write protected,
-           independently of the advisory attachment setting. */
-        return 0x0;
+        return (dptr->read_only || !fsimage_scp_can_write_slot(dptr->image,
+                    dptr->flux->playback.state.halftrack)) ? 0x0 : 0x10;
     }
     if ((dptr->GCR_image_loaded == 0) && (dptr->P64_image_loaded == 0)) {
         /* No disk in drive, write protection is off. */

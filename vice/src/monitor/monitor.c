@@ -182,6 +182,7 @@ int break_on_dummy_access = 0;
 RADIXTYPE default_radix;
 MEMSPACE default_memspace = e_comp_space;
 static bool inside_monitor = false;
+static MEMSPACE monitor_entry_memspace = e_default_space;
 static bool should_pause_on_exit_mon = false;
 static bool pause_on_exit_mon = false;
 static unsigned int instruction_count;
@@ -2841,8 +2842,23 @@ void mon_delete_conditional(cond_node_t *cnode)
 /* *** SNAPSHOTS *** */
 
 
+static bool monitor_snapshot_at_cpu_boundary(void)
+{
+    if (monitor_entry_memspace != e_default_space
+        && monitor_entry_memspace != e_comp_space) {
+        /* The drive CPU can stop while a host CPU instruction is still
+           executing. Its exported registers cannot describe that state. */
+        mon_out("Resume from the drive breakpoint and pause at a computer CPU instruction boundary before using snapshots.\n");
+        return false;
+    }
+    return true;
+}
+
 int mon_write_snapshot(const char *name, int save_roms, int save_disks, int even_mode)
 {
+    if (!monitor_snapshot_at_cpu_boundary()) {
+        return -1;
+    }
     return machine_write_snapshot(name, save_roms, save_disks, even_mode);
 }
 
@@ -2850,6 +2866,9 @@ int mon_read_snapshot(const char *name, int even_mode)
 {
     int ret;
 
+    if (!monitor_snapshot_at_cpu_boundary()) {
+        return -1;
+    }
     ret = machine_read_snapshot(name, even_mode);
 
     /* Reset the current address */
@@ -3405,6 +3424,7 @@ void monitor_startup(MEMSPACE mem)
         default_memspace = mem;
     }
 
+    monitor_entry_memspace = mem;
     monitor_open();
     for (;;) {
 
@@ -3445,6 +3465,7 @@ void monitor_startup(MEMSPACE mem)
         }
     }
     monitor_close(true);
+    monitor_entry_memspace = e_default_space;
 
     if (pause_on_exit_mon) {
         pause_on_exit_mon = false;

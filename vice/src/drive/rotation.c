@@ -36,11 +36,14 @@
 #include "log.h"
 #include "rotation.h"
 #include "rotation-flux.h"
+#include "diskimage.h"
+#include "../diskimage/fsimage-scp.h"
 #include "../diskimage/flux-logic.h"
 #include "types.h"
 #include "p64.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #define ACCUM_MAX 0x10000
@@ -288,6 +291,8 @@ inline static uint32_t RANDOM_nextUInt(rotation_t *rptr)
 
 void rotation_begins(drive_t *dptr)
 {
+    unsigned int dnr;
+
     if (dptr->flux != NULL) {
         rotation_flux_rebase(dptr);
         return;
@@ -297,7 +302,7 @@ void rotation_begins(drive_t *dptr)
      * Fortunately the dual drives are not emulated at this level;
      * the 2nd CPU is emulated abstractly.
      */
-    unsigned int dnr = dptr->diskunit->mynumber;
+    dnr = dptr->diskunit->mynumber;
     rotation[dnr].rotation_last_clk = *(dptr->diskunit->clk_ptr);
     rotation[dnr].logic.cycle_index = 0;
 }
@@ -638,7 +643,7 @@ int rotation_flux_bind(rotation_flux_t *input, const flux_capture_t *capture,
     rc = flux_playback_bind(&input->playback, capture, halftrack);
     if (rc == FLUX_OK) {
         input->reference_phase = 0;
-        input->speed = (flux_capture_flags(capture) & FLUX_CAPTURE_360_RPM) ? 6 : 5;
+        input->speed = flux_capture_uses_360_clock(capture) ? 6 : 5;
         input->source_phase = 0;
         input->fault = 0;
     }
@@ -649,8 +654,216 @@ void rotation_flux_unbind(rotation_flux_t *input)
 {
     rotation_flux_t empty = {0};
     if (input != NULL) {
+        lib_free(input->write_pulses);
         *input = empty;
     }
+}
+
+static int pulse_order(const void *a, const void *b)
+{
+    const uint64_t x = *(const uint64_t *)a;
+    const uint64_t y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+int rotation_flux_finish_write(drive_t *dptr)
+{
+    rotation_flux_t *input = dptr->flux;
+    flux_playback_t cursor;
+    flux_capture_t *replacement;
+    uint64_t duration;
+    uint64_t start;
+    uint64_t end;
+    uint64_t cutoff;
+    uint64_t physical;
+    uint64_t phase;
+    uint64_t offsets[FLUX_CAPTURE_MAX_REVS];
+    size_t i;
+    size_t count = 0;
+    unsigned int rev;
+    unsigned int revolutions;
+    int rc;
+    int local_alignment;
+
+    if (!input || !input->writing) {
+        return FLUX_OK;
+    }
+    input->writing = 0;
+    if (input->write_elapsed < 2) {
+        return FLUX_OK;
+    }
+    duration = input->playback.state.duration;
+    phase = input->playback.state.phase;
+    physical = fsimage_scp_physical_turn(dptr->image, input->playback.state.halftrack);
+    revolutions = flux_capture_revolutions(input->playback.capture);
+    rev = (unsigned int)(input->playback.state.turn % revolutions);
+    local_alignment = !physical && input->playback.track && revolutions > 1 && input->write_elapsed < duration
+        && !(flux_capture_flags(input->playback.capture) & FLUX_CAPTURE_INDEXED);
+    if (local_alignment && input->write_elapsed > phase) {
+        /* The sector header preceded the boundary in the previous window. */
+        rev = (rev + revolutions - 1) % revolutions;
+        duration = flux_track_duration(input->playback.track, rev);
+    }
+    if (physical) {
+        phase += flux_track_boundary(input->playback.track, rev);
+        duration = physical;
+        phase %= duration;
+    }
+    end = phase & ~UINT64_C(1);
+    if (!end) {
+        end = duration;
+    }
+    cutoff = input->write_elapsed >= duration ? input->write_elapsed - duration : 0;
+    start = input->write_start;
+    if (flux_capture_revolutions(input->playback.capture) > 1) {
+        /* Anchor a cross-index write at the phase where the gate closed.
+           The splice maps this angular range onto each captured turn. */
+        start = (phase + duration
+                 - input->write_elapsed % duration) % duration;
+    }
+    input->write_start = start;
+    start = input->write_elapsed >= duration ? end % duration : start & ~UINT64_C(1);
+    for (i = 0; i < input->write_count; ++i) {
+        uint64_t elapsed = input->write_pulses[i];
+        if (elapsed > cutoff) {
+            uint64_t position = (input->write_start + elapsed % duration) % duration;
+            position &= ~UINT64_C(1);
+            input->write_pulses[count++] = position ? position : duration;
+        }
+    }
+    if (count > 1) {
+        qsort(input->write_pulses, count, sizeof(*input->write_pulses), pulse_order);
+    }
+    if ((flux_capture_flags(input->playback.capture) & FLUX_CAPTURE_DOUBLE_SIDED)
+        && (input->playback.state.halftrack & 1)) {
+        rc = FLUX_INVALID; /* Interleaved 1571 SCPs store full tracks only. */
+    } else if (physical) {
+        rc = flux_capture_splice_unindexed(input->playback.capture, input->playback.state.halftrack,
+                                           duration, start, end, input->write_pulses, count, &replacement);
+    } else if (local_alignment) {
+        unsigned int slot = input->playback.state.halftrack;
+        unsigned int track = (slot % FLUX_CAPTURE_TRACKS) / 2 + 1 + (slot >= FLUX_CAPTURE_TRACKS ? 35 : 0);
+        unsigned int cell = (16 - rotation[dptr->diskunit->mynumber].logic.ue7_dcba) * 20;
+        if (input->speed == 6) {
+            cell = (cell * 5 + 3) / 6;
+        }
+        rc = input->write_elapsed < duration && phase < duration
+            && flux_track_gcr_write_offsets(input->playback.track, track, cell, rev, start, -1, offsets)
+            ? flux_capture_splice_continuous(input->playback.capture, slot, duration, start, end,
+                                           input->write_pulses, count, offsets, &replacement)
+            : FLUX_INVALID;
+    } else {
+        rc = flux_capture_splice(input->playback.capture, input->playback.state.halftrack,
+                                 duration, start, end, input->write_pulses, count, &replacement);
+    }
+    if (rc == FLUX_OK) {
+        rc = flux_playback_restore(&cursor, replacement, &input->playback.state);
+        if (rc == FLUX_OK) {
+            input->playback = cursor;
+            fsimage_scp_adopt_write(dptr->image, replacement);
+        } else {
+            flux_capture_destroy(replacement);
+        }
+    }
+    if (rc != FLUX_OK) {
+        fsimage_scp_abort_write(dptr->image);
+        dptr->read_only = 1;
+        log_error(dptr->diskunit->log, "Native SCP write splice failed (%d).", rc);
+    }
+    return rc;
+}
+
+/* Advance the capture cursor through media that is under the write head.
+   Incoming transitions do not drive the encoder. */
+static int flux_write_advance(drive_t *dptr, rotation_t *rptr, uint64_t clocks)
+{
+    rotation_flux_t *input = dptr->flux;
+    flux_playback_t *cursor = &input->playback;
+    flux_logic_t *logic = &rptr->logic;
+    uint64_t physical = fsimage_scp_physical_turn(dptr->image, cursor->state.halftrack);
+    cursor->physical_turn = physical;
+    if (!input->writing) {
+        input->write_start = cursor->state.phase;
+        input->write_elapsed = 0;
+        input->write_count = 0;
+        input->writing = 1;
+    }
+    while (clocks--) {
+        uint64_t remain = 5;
+        uint64_t elapsed;
+        if (input->speed == 6) {
+            /* In normalized playback, one 16 MHz write clock spans 25/6
+               capture ticks. Carry the fraction through the read/write gate. */
+            unsigned int span = 25 + input->source_phase;
+            remain = span / 6;
+            input->source_phase = span % 6;
+        }
+        elapsed = remain;
+        while (remain) {
+            flux_event_t event;
+            unsigned int kind;
+            uint64_t span;
+            if (flux_playback_next_event(cursor, &event) != FLUX_OK) {
+                return FLUX_INVALID;
+            }
+            span = event.delta < remain ? event.delta : remain;
+            if (flux_playback_advance(cursor, span, &kind) != FLUX_OK) {
+                return FLUX_RANGE;
+            }
+            remain -= span;
+        }
+        input->write_elapsed += elapsed;
+        if (logic->so_delay && !--logic->so_delay) {
+            dptr->byte_ready_edge = dptr->byte_ready_level = 1;
+        }
+        if (++logic->ue7_counter == 16) {
+            logic->ue7_counter = logic->ue7_dcba;
+            logic->uf4_counter = (logic->uf4_counter + 1) & 15;
+            if ((logic->uf4_counter & 3) == 2) {
+                if (logic->last_write_data & 0x80) {
+                    if (input->write_count == input->write_capacity) {
+                        /* Keep at most the latest turn, even if the write
+                           gate stays open for several revolutions. */
+                        size_t first = 0;
+                        uint64_t duration = physical ? physical : cursor->state.duration;
+                        uint64_t cutoff = input->write_elapsed >= duration
+                            ? input->write_elapsed - duration : 0;
+                        while (first < input->write_count && input->write_pulses[first] <= cutoff) {
+                            ++first;
+                        }
+                        if (first) {
+                            input->write_count -= first;
+                            memmove(input->write_pulses, input->write_pulses + first,
+                                    input->write_count * sizeof(*input->write_pulses));
+                        } else {
+                            size_t capacity = input->write_capacity ? input->write_capacity * 2 : 512;
+                            if (input->write_capacity == FLUX_CAPTURE_MAX_WORDS) {
+                                return FLUX_LIMIT;
+                            }
+                            input->write_capacity = capacity < FLUX_CAPTURE_MAX_WORDS
+                                ? capacity : FLUX_CAPTURE_MAX_WORDS;
+                            input->write_pulses = lib_realloc(input->write_pulses,
+                                input->write_capacity * sizeof(*input->write_pulses));
+                        }
+                    }
+                    input->write_pulses[input->write_count++] = input->write_elapsed;
+                }
+                logic->last_write_data <<= 1;
+                if (++logic->bit_counter == 8) {
+                    logic->bit_counter = 0;
+                    logic->last_write_data = dptr->GCR_write_value;
+                    if (dptr->byte_ready_active & BRA_BYTE_READY) {
+                        logic->so_delay = 16 - (logic->cycle_index & 15);
+                        if (logic->so_delay < 10) {
+                            logic->so_delay += 16;
+                        }
+                    }
+                }
+            }
+        }
+        logic->cycle_index++;
+    }
+    return FLUX_OK;
 }
 
 void rotation_flux_rebase(drive_t *dptr)
@@ -670,12 +883,17 @@ int rotation_flux_clock(drive_t *dptr)
     rotation_t *rptr = &rotation[dptr->diskunit->mynumber];
     rotation_flux_t *input = dptr->flux;
     CLOCK clk = *dptr->diskunit->clk_ptr;
-    uint64_t cpu_cycles, ref_cycles, advance = dptr->req_ref_cycles & 15;
+    uint64_t cpu_cycles;
+    uint64_t ref_cycles;
+    uint64_t advance = dptr->req_ref_cycles & 15;
     unsigned int shift = rptr->frequency ? 3 : 4;
     int rc;
 
     if (input == NULL || input->fault) {
         return FLUX_INVALID;
+    }
+    if (input->writing && (dptr->read_write_mode || !(dptr->byte_ready_active & BRA_MOTOR_ON))) {
+        rotation_flux_finish_write(dptr);
     }
     if (!(dptr->byte_ready_active & BRA_MOTOR_ON)) {
         flux_playback_set_motor(&input->playback, 0);
@@ -698,7 +916,17 @@ int rotation_flux_clock(drive_t *dptr)
         if (due > UINT64_MAX / 5) {
             return FLUX_RANGE;
         }
-        rc = rotation_flux_advance(dptr, input, due * 5);
+        if (!dptr->read_only && !dptr->read_write_mode
+            && fsimage_scp_can_write_slot(dptr->image, input->playback.state.halftrack)) {
+            rc = flux_write_advance(dptr, rptr, due);
+            if (rc != FLUX_OK) {
+                input->writing = 0;
+                dptr->read_only = 1;
+                fsimage_scp_abort_write(dptr->image);
+            }
+        } else {
+            rc = rotation_flux_advance(dptr, input, due * 5);
+        }
         if (rc != FLUX_OK) {
             return rc;
         }
@@ -724,6 +952,7 @@ int rotation_flux_advance(drive_t *dptr, rotation_flux_t *input, uint64_t ticks)
     out.ready_edge = dptr->byte_ready_edge;
     out.ready_level = dptr->byte_ready_level;
     out.bit = -1;
+    input->playback.physical_turn = fsimage_scp_physical_turn(dptr->image, input->playback.state.halftrack);
     if (input->speed == 6) {
         rc = flux_logic_advance_360(&rptr->logic, &out, &input->playback,
                                    &input->reference_phase, &input->source_phase,
@@ -1023,6 +1252,7 @@ static void rotation_1541_simple(drive_t *dptr)
     int bits_moved = 0;
     uint64_t tmp = 1000000UL;
     unsigned long rpmscale;
+    CLOCK clk;
 
     dptr->req_ref_cycles = 0;
 
@@ -1030,7 +1260,7 @@ static void rotation_1541_simple(drive_t *dptr)
 
     /* Calculate the number of bits that have passed under the R/W head since
        the last time.  */
-    CLOCK clk = *(dptr->diskunit->clk_ptr);
+    clk = *(dptr->diskunit->clk_ptr);
     delta = clk - rptr->rotation_last_clk;
     rptr->rotation_last_clk = clk;
 
@@ -1049,7 +1279,8 @@ static void rotation_1541_simple(drive_t *dptr)
 
     if (dptr->read_write_mode) {
         int off = dptr->GCR_head_offset;
-        unsigned int byte, last_read_data = rptr->logic.last_read_data << 7;
+        unsigned int byte;
+        unsigned int last_read_data = rptr->logic.last_read_data << 7;
         unsigned int bit_counter = rptr->logic.bit_counter;
 
         /* if no image is attached or track does not exists, read 0 */

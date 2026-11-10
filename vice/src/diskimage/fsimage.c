@@ -130,6 +130,10 @@ void fsimage_media_destroy(disk_image_t *image)
         fsimage_close(image);
     }
     fsimage_scp_dispose(image);
+    lib_free(fsimage->flux_scp_turns);
+    flux_capture_destroy(fsimage->flux_scp_physical);
+    lib_free(fsimage->flux_scp_wrsp);
+    lib_free(fsimage->flux_scp_trailer);
     lib_free(fsimage->name);
     lib_free(fsimage);
     image->media.fsimage = NULL;
@@ -184,11 +188,22 @@ int fsimage_open(disk_image_t *image)
     fsimage_t *fsimage;
     size_t length;
     unsigned int isdir;
-    int scp_result;
+    int requested_readonly = image->read_only;
 
     DBG(("fsimage_open image:%p", image));
 
     fsimage = image->media.fsimage;
+    lib_free(fsimage->flux_scp_turns);
+    flux_capture_destroy(fsimage->flux_scp_physical);
+    fsimage->flux_scp_turns = NULL;
+    fsimage->flux_scp_physical = NULL;
+    memset(fsimage->flux_scp_flipped_dirty, 0, sizeof(fsimage->flux_scp_flipped_dirty));
+    lib_free(fsimage->flux_scp_wrsp);
+    lib_free(fsimage->flux_scp_trailer);
+    fsimage->flux_scp_wrsp = NULL;
+    fsimage->flux_scp_trailer = NULL;
+    fsimage->flux_scp_trailer_size = 0;
+    fsimage->flux_scp_trailer_offset = 0;
     fsimage->error_info.map = NULL;
 
     /* stat file to find out if it exists or if it is a directory */
@@ -203,29 +218,7 @@ int fsimage_open(disk_image_t *image)
         return -1;
     }
 
-    /* Identify SCP through a read-only handle, irrespective of its extension
-       or the user's writable-attachment setting. Never give an SCP image a
-       writable zfile handle (including on failed validation). */
-    fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
-    if (fsimage->fd == NULL) {
-        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
-        return -1;
-    }
-    image->type = DISK_IMAGE_TYPE_UNKNOWN;
-    scp_result = fsimage_scp_read(image);
-    if (scp_result == FLUX_OK) {
-        return 0;
-    }
-    if (scp_result != SCP_FILE_NOT_MATCHED) {
-        log_error(fsimage_log, "Invalid or unsupported SCP image `%s' (%d).",
-                  fsimage->name, scp_result);
-        fsimage_close(image);
-        return -1;
-    }
-    zfile_fclose(fsimage->fd);
-    fsimage->fd = NULL;
-
-    /* Other formats retain their existing writable/fallback policy. */
+    /* proceed with normal opening */
     if (image->read_only) {
         fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
     } else {
@@ -244,6 +237,9 @@ int fsimage_open(disk_image_t *image)
     }
 
     if (fsimage_probe(image) == 0) {
+        if (image->type == DISK_IMAGE_TYPE_SCP && !requested_readonly) {
+            fsimage_scp_enable_write(image, 0, SCP_WRITE_300_ONLY, 0, 0);
+        }
         return 0;
     }
 
@@ -259,8 +255,12 @@ int fsimage_close(disk_image_t *image)
     DBG(("fsimage_close image:%p", image));
     fsimage = image->media.fsimage;
 
-    /* Native data is never flushed. Also handles disposal after an earlier
-       close or a failed probe. No drive may retain a borrowed cursor here. */
+    /* No drive may retain a borrowed cursor here. */
+    if (image->type == DISK_IMAGE_TYPE_SCP && fsimage_scp_flush(image, NULL) < 0) {
+        log_error(fsimage_log, "Could not save SCP disk image '%s'.", fsimage->name);
+        fsimage_scp_dispose(image);
+        return -1;
+    }
     fsimage_scp_dispose(image);
     if (fsimage->fd == NULL) {
         if (fsimage->flux_only) {
@@ -287,6 +287,38 @@ int fsimage_close(disk_image_t *image)
 
 /*-----------------------------------------------------------------------*/
 
+static flux_view_t *fsimage_get_flux_view(fsimage_t *fsimage)
+{
+    if (fsimage->flux_view == NULL) {
+        fsimage->flux_view = flux_view_create(fsimage->flux);
+    }
+    return fsimage->flux_view;
+}
+
+int fsimage_scp_write_sector(disk_image_t *image, const uint8_t *buf, const disk_addr_t *dadr)
+{
+    flux_capture_t *replacement;
+    int rc;
+    if (image->read_only) {
+        return -1;
+    }
+    rc = flux_view_write_sector(fsimage_get_flux_view(image->media.fsimage), dadr->track,
+                                dadr->sector, buf, &replacement);
+    if (rc != FLUX_OK) {
+        fsimage_scp_abort_write(image);
+        return -1;
+    }
+    if (replacement) {
+        fsimage_scp_adopt_write(image, replacement);
+    }
+    return 0;
+}
+
+int fsimage_scp_read_disk_id(const disk_image_t *image, unsigned int track, uint8_t id[2])
+{
+    return flux_view_read_disk_id(fsimage_get_flux_view(image->media.fsimage), track, id);
+}
+
 int fsimage_read_sector(const disk_image_t *image, uint8_t *buf, const disk_addr_t *dadr)
 {
     fsimage_t *fsimage;
@@ -298,10 +330,7 @@ int fsimage_read_sector(const disk_image_t *image, uint8_t *buf, const disk_addr
         return CBMDOS_IPE_NOT_READY;
     }
     if (image->type == DISK_IMAGE_TYPE_SCP) {
-        if (fsimage->flux_view == NULL) {
-            fsimage->flux_view = flux_view_create(fsimage->flux);
-        }
-        return flux_view_read(fsimage->flux_view, dadr->track, dadr->sector, buf);
+        return flux_view_read(fsimage_get_flux_view(fsimage), dadr->track, dadr->sector, buf);
     }
     if (fsimage->fd == NULL) {
         return CBMDOS_IPE_NOT_READY;

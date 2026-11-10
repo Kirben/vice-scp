@@ -85,7 +85,6 @@
 #include "vdrive-bam.h"
 #include "vice-event.h"
 #include "vsync.h"
-#include "zfile.h"
 
 #ifdef DEBUG_AUTOSTART
 #define DBG(_x_) log_printf  _x_
@@ -2161,8 +2160,9 @@ static void autostart_disk_cook_name(char **name)
 }
 
 /* Autostart disk image `file_name'.  */
-int autostart_disk(int unit, int drive, const char *file_name, const char *program_name,
-                   unsigned int program_number, unsigned int runmode)
+static int autostart_disk_with_type(int unit, int drive, const char *file_name,
+                                    const char *program_name, unsigned int program_number,
+                                    unsigned int runmode, unsigned int *image_type)
 {
     char *name = NULL;
 
@@ -2180,6 +2180,10 @@ int autostart_disk(int unit, int drive, const char *file_name, const char *progr
     /* make sure to init TDE, Busdevice and Trapdevice status before each autostart */
     init_drive_emulation_state(unit, drive);
 
+    if (crt_probe(file_name) || !probe_disk_image_type(file_name, image_type)) {
+        goto exiterror;
+    }
+
     /* Get program name first to avoid more than one file handle open on
        image.  */
     if (!program_name && program_number > 0) {
@@ -2194,9 +2198,7 @@ int autostart_disk(int unit, int drive, const char *file_name, const char *progr
 
     if (name) {
         autostart_disk_cook_name(&name);
-        if (!crt_probe(file_name) &&
-            probe_disk_image(file_name) &&
-            !(file_system_attach_disk(unit, drive, file_name) < 0)) {
+        if (file_system_attach_disk(unit, drive, file_name) == 0) {
 
             struct disk_image_s *diskimg;
 
@@ -2215,22 +2217,24 @@ int autostart_disk(int unit, int drive, const char *file_name, const char *progr
             if (diskimg == NULL) {
                 log_error(autostart_log, "Failed to get disk image for unit %d.", unit);
             } else {
-                int chk = drive_check_image_format(diskimg->type, 0);
+                unsigned int mounted_type = diskimg->type;
+                int chk = drive_check_image_format(mounted_type, 0);
                 /* change drive type only when image does not work in current drive */
                 if (chk < 0) {
-                    log_message(autostart_log, "mounted image is type: %u, changing drive.", diskimg->type);
-                    if (resources_set_int_sprintf("Drive%dType", drive_image_type_to_drive_type(diskimg->type), unit) < 0) {
+                    log_message(autostart_log, "mounted image is type: %u, changing drive.", mounted_type);
+                    if (resources_set_int_sprintf("Drive%dType", drive_image_type_to_drive_type(mounted_type), unit) < 0) {
                         log_error(autostart_log, "Failed to set drive type.");
                     }
                 } else {
-                    log_verbose(autostart_log, "mounted image is type: %u, not changing drive.", diskimg->type);
+                    log_verbose(autostart_log, "mounted image is type: %u, not changing drive.", mounted_type);
                 }
 
-                /* detach disk before reattaching */
-                file_system_detach_disk(unit, drive);
+                if (mounted_type != DISK_IMAGE_TYPE_SCP) {
+                    file_system_detach_disk(unit, drive);
 
-                if (file_system_attach_disk(unit, drive, file_name) < 0) {
-                    goto exiterror;
+                    if (file_system_attach_disk(unit, drive, file_name) < 0) {
+                        goto exiterror;
+                    }
                 }
                 /* if TDE was enabled before autostarting but is disabled now, enable it again */
                 if (orig_drive_true_emulation_state && !get_true_drive_emulation_state(unit)) {
@@ -2262,6 +2266,13 @@ exiterror:
     return -1;
 }
 
+
+int autostart_disk(int unit, int drive, const char *file_name, const char *program_name,
+                   unsigned int program_number, unsigned int runmode)
+{
+    return autostart_disk_with_type(unit, drive, file_name, program_name,
+                                    program_number, runmode, NULL);
+}
 
 /* Autostart PRG file `file_name'.
 
@@ -2479,24 +2490,11 @@ int autostart_autodetect_opt_prgname(const char *file_prog_name,
 
  * \return  0 on success, -1 on failure
  */
-static int autostart_scp_signature(const char *file_name)
-{
-    unsigned char signature[3];
-    FILE *fd = zfile_fopen(file_name, MODE_READ);
-    int matched = 0;
-    if (fd != NULL) {
-        matched = fread(signature, 1, sizeof(signature), fd) == sizeof(signature)
-                  && memcmp(signature, "SCP", sizeof(signature)) == 0;
-        zfile_fclose(fd);
-    }
-    return matched;
-}
-
 int autostart_autodetect(const char *file_name, const char *program_name,
                          unsigned int program_number, unsigned int runmode)
 {
     int unit = DRIVE_UNIT_MIN, drive = 0;
-    int native_scp;
+    unsigned int image_type = DISK_IMAGE_TYPE_UNKNOWN;
 #ifdef HAVE_NATIVE_GTK3
     if (!mainlock_is_vice_thread()) {
         mainlock_assert_lock_obtained();
@@ -2523,15 +2521,14 @@ int autostart_autodetect(const char *file_name, const char *program_name,
 
     log_message(autostart_log, "Autodetecting image type of `%s'.", file_name);
 
-    native_scp = autostart_scp_signature(file_name);
-
     /* autostart_disk does probing internally, so not required here */
-    if (autostart_disk(unit, drive, file_name, program_name, program_number, runmode) == 0) {
+    if (autostart_disk_with_type(unit, drive, file_name, program_name, program_number,
+                                 runmode, &image_type) == 0) {
         log_message(autostart_log, "`%s' recognized as disk image.", file_name);
         return 0;
     }
 
-    if (native_scp) {
+    if (image_type == DISK_IMAGE_TYPE_SCP) {
         /* Recognition is authoritative even if parsing, native attachment or
            directory selection failed. Never inject rejected flux as a PRG. */
         copy_virtual_state_to_tde = 0;

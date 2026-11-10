@@ -734,12 +734,21 @@ void drive_set_half_track(int num, int side, drive_t *dptr)
     int tmp;
 
     if (dptr->flux != NULL) {
-        if (num < 2) { num = 2; }
-        if (num > (int)FLUX_CAPTURE_TRACKS + 1) { num = FLUX_CAPTURE_TRACKS + 1; }
+        if (drive_get_num_heads(type) == 1) {
+            side = 0;
+        }
+        if (num < 2) {
+            num = 2;
+        }
+        if (num > (int)FLUX_CAPTURE_TRACKS + 1) {
+            num = FLUX_CAPTURE_TRACKS + 1;
+        }
         rotation_rotate_disk(dptr);
-        flux_playback_change_track(&dptr->flux->playback, num - 2);
+        rotation_flux_finish_write(dptr);
+        flux_playback_change_track(&dptr->flux->playback,
+                                   rotation_flux_track(num, side, dptr->flux->align_halftrack));
         dptr->current_half_track = num;
-        dptr->side = 0;
+        dptr->side = side;
         dptr->GCR_track_start_ptr = NULL;
         dptr->GCR_current_track_size = dptr->GCR_head_offset = 0;
         return;

@@ -56,6 +56,28 @@ def run(Session, out, image, success, env, app):
         key = name.encode()
         return session.command(0x52, bytes([1, len(key)]) + key + bytes([1, val]))[0]
 
+    unflagged = out / 'indexed-360-no-rpm-flag.scp'
+    inferred = bytearray(data)
+    inferred[8] &= ~4
+    unflagged.write_bytes(inferred)
+    unflagged.chmod(0o444)
+    session = Session('inferred-360', disk=unflagged)
+    try:
+        saved = session.save('inferred.vsf', 0)
+        assert module(saved)[1][57] == 6
+        assert session.restore(saved) == 0
+        session.load_program()
+        assert unflagged.read_bytes() == inferred
+        results['unflagged_indexed_360_native_load_and_snapshot'] = True
+    finally:
+        session.close()
+    extracted = out / 'extracted-inferred.prg'
+    subprocess.run([str(app / 'c1541.exe'), '-attach', str(unflagged),
+                    '-read', 'success', str(extracted)], env=env,
+                   capture_output=True, timeout=45, check=True)
+    assert extracted.read_bytes() == success.read_bytes()
+    results['unflagged_indexed_360_sector_view'] = True
+
     for model in [1541, 1542]:
         session = Session('auto-' + str(model), disk=disk, model=model)
         try:

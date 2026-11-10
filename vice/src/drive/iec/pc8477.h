@@ -30,6 +30,7 @@
 #include "types.h"
 
 struct disk_image_s;
+struct snapshot_s;
 struct diskunit_context_s;
 typedef void (*pc8477_motor_on_callback_t)(void *data, int signal);
 typedef struct pc8477_s pc8477_t;
@@ -48,6 +49,10 @@ void pc8477_reset(pc8477_t *drv, int is8477);
 int pc8477_irq(pc8477_t *drv);
 
 int pc8477_attach_image(struct disk_image_s *image, unsigned int unit);
+void pc8477_flush_scp(struct diskunit_context_s *drv);
 int pc8477_detach_image(struct disk_image_s *image, unsigned int unit);
+
+int pc8477_snapshot_write_module(pc8477_t *drv, struct snapshot_s *s);
+int pc8477_snapshot_read_module(pc8477_t *drv, struct snapshot_s *s);
 
 #endif

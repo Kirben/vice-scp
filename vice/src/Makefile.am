@@ -1317,6 +1317,7 @@ c1541_SOURCES = \
 	opencbmlib.c \
 	rawfile.c \
 	resources.c \
+	sha1.c \
 	util.c \
 	zfile.c \
 	zipcode.c

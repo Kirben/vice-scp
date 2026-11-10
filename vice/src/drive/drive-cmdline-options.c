@@ -87,6 +87,18 @@ static cmdline_option_t cmd_drive[] =
     { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, NULL, NULL,
       "<mode>", "Set native flux speed (0: auto 360-to-300 RPM, 1: captured clock; detach before changing)" },
+    { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, NULL, NULL,
+      "<halftrack>", "Use lower full-track flux at one odd SCP head position (twice track number; 0: exact)" },
+    { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, NULL, (void *)1,
+      NULL, "Mount top-side-only GCR SCPs flipped on the 1541" },
+    { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, NULL, (void *)0,
+      NULL, "Disable mounting top-side-only SCPs flipped" },
+    { NULL, SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
+      NULL, NULL, NULL, NULL,
+      "<density>", "Set blank SCP MFM density (0: drive default, 1: DD, 2: HD, 3: ED)" },
     CMDLINE_LIST_END
 };
 
@@ -187,6 +199,14 @@ int drive_cmdline_options_init(void)
             = lib_msprintf("Drive%iTrueEmulation", dnr + 8);
         cmd_drive[8].name = lib_msprintf("-drive%ifluxspeed", dnr + 8);
         cmd_drive[8].resource_name = lib_msprintf("Drive%iFluxSpeed", dnr + 8);
+        cmd_drive[9].name = lib_msprintf("-drive%ifluxalign", dnr + 8);
+        cmd_drive[9].resource_name = lib_msprintf("Drive%iFluxAlignHalftrack", dnr + 8);
+        cmd_drive[10].name = lib_msprintf("-drive%iscpflip", dnr + 8);
+        cmd_drive[10].resource_name = lib_msprintf("Drive%iSCPFlip", dnr + 8);
+        cmd_drive[11].name = lib_msprintf("+drive%iscpflip", dnr + 8);
+        cmd_drive[11].resource_name = lib_msprintf("Drive%iSCPFlip", dnr + 8);
+        cmd_drive[12].name = lib_msprintf("-drive%iscpblankdensity", dnr + 8);
+        cmd_drive[12].resource_name = lib_msprintf("Drive%iSCPBlankDensity", dnr + 8);
 
         if (has_iec) {
             cmd_drive_rtc[0].name = lib_msprintf("-drive%irtcsave", dnr + 8);
@@ -203,7 +223,7 @@ int drive_cmdline_options_init(void)
             return -1;
         }
 
-        for (i = 0; i < 9; i++) {
+        for (i = 0; i < 13; i++) {
             lib_free(cmd_drive[i].name);
             lib_free(cmd_drive[i].resource_name);
         }

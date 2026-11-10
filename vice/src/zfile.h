@@ -38,6 +38,8 @@ typedef enum {
 } zfile_action_t;
 
 FILE *zfile_fopen(const char *name, const char *mode);
+/* Suppress recompression/writeback when closing this stream. */
+void zfile_set_read_only(FILE *stream);
 int zfile_fclose(FILE *stream);
 
 void zfile_shutdown(void);

@@ -457,7 +457,7 @@ static void drivecpu65c02_set_bank_base(void *context)
 */
 
 #define SNAP_MAJOR 1
-#define SNAP_MINOR 3
+#define SNAP_MINOR 5
 
 int drivecpu65c02_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
 {
@@ -473,7 +473,7 @@ int drivecpu65c02_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
     }
 
     if (0
-        || SMW_DW(m, (uint32_t) *(drv->clk_ptr)) < 0
+        || SMW_CLOCK(m, *(drv->clk_ptr)) < 0
         || SMW_B(m, (uint8_t)R65C02_REGS_GET_A(&(cpu->cpu_R65C02_regs))) < 0
         || SMW_B(m, (uint8_t)R65C02_REGS_GET_X(&(cpu->cpu_R65C02_regs))) < 0
         || SMW_B(m, (uint8_t)R65C02_REGS_GET_Y(&(cpu->cpu_R65C02_regs))) < 0
@@ -481,10 +481,10 @@ int drivecpu65c02_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
         || SMW_W(m, (uint16_t)R65C02_REGS_GET_PC(&(cpu->cpu_R65C02_regs))) < 0
         || SMW_B(m, (uint8_t)R65C02_REGS_GET_STATUS(&(cpu->cpu_R65C02_regs))) < 0
         || SMW_DW(m, (uint32_t)(cpu->last_opcode_info)) < 0
-        || SMW_DW(m, (uint32_t)(cpu->last_clk)) < 0
-        || SMW_DW(m, (uint32_t)(cpu->cycle_accum)) < 0
-        || SMW_DW(m, (uint32_t)(cpu->last_exc_cycles)) < 0
-        || SMW_DW(m, (uint32_t)(cpu->stop_clk)) < 0
+        || SMW_CLOCK(m, (cpu->last_clk)) < 0
+        || SMW_CLOCK(m, (cpu->cycle_accum)) < 0
+        || SMW_CLOCK(m, (cpu->last_exc_cycles)) < 0
+        || SMW_CLOCK(m, (cpu->stop_clk)) < 0
         || SMW_B(m, cpu->cpu_last_data) < 0
         ) {
         goto fail;
@@ -496,7 +496,9 @@ int drivecpu65c02_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
 
     if (drv->type == DRIVE_TYPE_2000
         || drv->type == DRIVE_TYPE_4000) {
-        if (SMW_BA(m, drv->drive_ram, 0x2000) < 0) {
+        /* CMD FD firmware maps RAM at $0000-$3fff and $5000-$7fff. */
+        if (SMW_BA(m, drv->drive_ram, 0x4000) < 0
+            || SMW_BA(m, drv->drive_ram + 0x5000, 0x3000) < 0) {
             goto fail;
         }
     }
@@ -520,6 +522,20 @@ fail:
     return -1;
 }
 
+/* Older 65C02 snapshots wrote drive clocks as 32-bit values. */
+static int read_drive_clock(snapshot_module_t *m, unsigned int minor, CLOCK *clock)
+{
+    uint32_t value;
+    if (minor >= 4) {
+        return SMR_CLOCK(m, clock);
+    }
+    if (SMR_DW(m, &value) < 0) {
+        return -1;
+    }
+    *clock = value;
+    return 0;
+}
+
 int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
 {
     uint8_t major, minor;
@@ -535,12 +551,16 @@ int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
         return -1;
     }
 
+    if (major != SNAP_MAJOR || minor > SNAP_MINOR) {
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+        goto fail;
+    }
+
     /* Before we start make sure all devices are reset.  */
     drivecpu65c02_reset(drv);
 
-    /* XXX: Assumes `CLOCK' is the same size as a `DWORD'.  */
     if (0
-        || SMR_CLOCK(m, drv->clk_ptr) < 0
+        || read_drive_clock(m, minor, drv->clk_ptr) < 0
         || SMR_B(m, &a) < 0
         || SMR_B(m, &x) < 0
         || SMR_B(m, &y) < 0
@@ -548,10 +568,10 @@ int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
         || SMR_W(m, &pc) < 0
         || SMR_B(m, &status) < 0
         || SMR_DW_UINT(m, &(cpu->last_opcode_info)) < 0
-        || SMR_CLOCK(m, &(cpu->last_clk)) < 0
-        || SMR_CLOCK(m, &(cpu->cycle_accum)) < 0
-        || SMR_CLOCK(m, &(cpu->last_exc_cycles)) < 0
-        || SMR_CLOCK(m, &(cpu->stop_clk)) < 0
+        || read_drive_clock(m, minor, &(cpu->last_clk)) < 0
+        || read_drive_clock(m, minor, &(cpu->cycle_accum)) < 0
+        || read_drive_clock(m, minor, &(cpu->last_exc_cycles)) < 0
+        || read_drive_clock(m, minor, &(cpu->stop_clk)) < 0
         || SMR_B(m, &(cpu->cpu_last_data)) < 0
         ) {
         goto fail;
@@ -576,7 +596,8 @@ int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
 
     if (drv->type == DRIVE_TYPE_2000
         || drv->type == DRIVE_TYPE_4000) {
-        if (SMR_BA(m, drv->drive_ram, 0x2000) < 0) {
+        if (SMR_BA(m, drv->drive_ram, minor >= 5 ? 0x4000 : 0x2000) < 0
+            || (minor >= 5 && SMR_BA(m, drv->drive_ram + 0x5000, 0x3000) < 0)) {
             goto fail;
         }
     }

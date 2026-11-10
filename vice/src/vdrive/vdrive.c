@@ -56,6 +56,7 @@
 #include "cbmdos.h"
 #include "diskconstants.h"
 #include "diskimage.h"
+#include "diskimage/flux-capture.h"
 #include "drive.h"
 #include "fsdevice.h"
 #include "lib.h"
@@ -463,8 +464,16 @@ int vdrive_attach_image(disk_image_t *image, unsigned int unit,
             vdrive->bam_size = 0x500;
             vdrive->current_offset = 0;
             break;
-        case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_SCP:
+            if (flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_8X50) {
+                vdrive->image_format = image->tracks > 77 ? VDRIVE_IMAGE_FORMAT_8250 : VDRIVE_IMAGE_FORMAT_8050;
+                vdrive->num_tracks = image->tracks;
+                vdrive->bam_size = image->tracks > 77 ? 0x500 : 0x300;
+                vdrive->current_offset = 0;
+                break;
+            }
+            /* fall through */
+        case DISK_IMAGE_TYPE_G64:
             vdrive->image_format = VDRIVE_IMAGE_FORMAT_1541;
             vdrive->num_tracks = NUM_TRACKS_1541;
             vdrive->bam_size = 0x100;

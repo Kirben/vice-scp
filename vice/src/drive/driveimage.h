@@ -32,6 +32,10 @@ struct drive_s;
 
 void drive_image_init(void);
 void drive_image_init_track_size_d64(struct drive_s *drive);
+int drive_check_scp_ieee(unsigned int type);
+int drive_check_scp_write(unsigned int type, unsigned int flags);
+int drive_check_scp_gcr(unsigned int type, unsigned int flags);
+int drive_check_scp_mfm(unsigned int type, unsigned int flags);
 int drive_check_image_format(unsigned int format, unsigned int dnr);
 int drive_image_type_to_drive_type(unsigned int type);
 

@@ -30,11 +30,17 @@
 #include <stdio.h>
 
 #include "types.h"
+#include "flux-capture.h"
 
 struct disk_image_s;
 struct disk_addr_s;
 struct flux_capture_s;
 struct flux_view_s;
+
+enum fsimage_flux_origin_e {
+    FSIMAGE_FLUX_FILE = 1,
+    FSIMAGE_FLUX_EMBEDDED
+};
 
 typedef struct fsimage_s {
     FILE *fd;
@@ -46,8 +52,22 @@ typedef struct fsimage_s {
     } error_info;
     /* Sole owner. Drive cursors must unbind before close/media destruction. */
     struct flux_capture_s *flux;
-    unsigned int flux_only; /* Snapshot-owned native capture, no file handle. */
+    unsigned int flux_only; /* FSIMAGE_FLUX_* when no file handle is open. */
     struct flux_view_s *flux_view; /* Private DOS view; never a drive cursor. */
+    unsigned int flux_dirty;
+    unsigned int flux_write_failed;
+    uint8_t flux_file_identity[20];
+    flux_capture_t *flux_scp_physical;
+    uint64_t *flux_scp_turns;
+    uint8_t flux_scp_flipped_dirty[FLUX_CAPTURE_TRACKS];
+    uint64_t flux_scp_trailer_offset;
+    size_t flux_scp_trailer_size;
+    uint8_t *flux_scp_trailer;
+    uint8_t *flux_scp_wrsp;
+    uint8_t flux_scp_flags;
+    uint8_t flux_scp_heads;
+    uint8_t flux_scp_disk_type;
+    uint8_t flux_scp_range[2];
 } fsimage_t;
 
 
@@ -63,6 +83,8 @@ int fsimage_open_probe(disk_image_t *image);
 
 int fsimage_open(struct disk_image_s *image);
 int fsimage_close(struct disk_image_s *image);
+int fsimage_scp_write_sector(struct disk_image_s *image, const uint8_t *buf, const disk_addr_t *dadr);
+int fsimage_scp_read_disk_id(const struct disk_image_s *image, unsigned int track, uint8_t id[2]);
 int fsimage_read_sector(const struct disk_image_s *image, uint8_t *buf,
                         const struct disk_addr_s *dadr);
 int fsimage_write_sector(struct disk_image_s *image, const uint8_t *buf,

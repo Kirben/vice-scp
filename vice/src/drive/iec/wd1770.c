@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "diskimage.h"
+#include "../../diskimage/flux-capture.h"
 #include "drive.h"
 #include "drivetypes.h"
 #include "log.h"
@@ -948,7 +949,13 @@ int wd1770_attach_image(disk_image_t *image, unsigned int unit)
         return -1;
     }
 
+    if (image->type == DISK_IMAGE_TYPE_SCP
+        && (diskunit_context[unit - 8]->type != DRIVE_TYPE_1581
+            || !(flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_MFM))) {
+        return -1;
+    }
     switch (image->type) {
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D81:
         case DISK_IMAGE_TYPE_D1M:
             disk_image_attach_log(image, wd1770_log, unit, 0);
@@ -961,13 +968,24 @@ int wd1770_attach_image(disk_image_t *image, unsigned int unit)
     return 0;
 }
 
+void wd1770_flush_scp(diskunit_context_t *drv)
+{
+    fdd_flush(drv->wd1770->fdd);
+}
+
 int wd1770_detach_image(disk_image_t *image, unsigned int unit)
 {
     if (image == NULL || unit < 8 || unit > 8 + NUM_DISK_UNITS) {
         return -1;
     }
 
+    if (image->type == DISK_IMAGE_TYPE_SCP
+        && (diskunit_context[unit - 8]->type != DRIVE_TYPE_1581
+            || !(flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_MFM))) {
+        return -1;
+    }
     switch (image->type) {
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D81:
         case DISK_IMAGE_TYPE_D1M:
             disk_image_detach_log(image, wd1770_log, unit, 0);

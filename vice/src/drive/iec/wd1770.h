@@ -39,6 +39,7 @@ void wd1770d_init(struct diskunit_context_s *drv);
 void wd1770_shutdown(wd1770_t *drv);
 
 int wd1770_attach_image(struct disk_image_s *image, unsigned int unit);
+void wd1770_flush_scp(struct diskunit_context_s *drv);
 int wd1770_detach_image(struct disk_image_s *image, unsigned int unit);
 
 int wd1770_disk_change(wd1770_t *drv);

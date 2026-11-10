@@ -30,10 +30,16 @@ int native_test_live(void) { return live; }
 void *native_test_malloc(size_t size)
 {
     allocation_t *p;
-    if (remaining == 0 || size > SIZE_MAX - sizeof(*p)) { return NULL; }
-    if (remaining > 0) { remaining--; }
+    if (remaining == 0 || size > SIZE_MAX - sizeof(*p)) {
+        return NULL;
+    }
+    if (remaining > 0) {
+        remaining--;
+    }
     p = malloc(sizeof(*p) + size);
-    if (!p) { return NULL; }
+    if (!p) {
+        return NULL;
+    }
     p->size = size;
     live++;
     return p + 1;
@@ -41,9 +47,13 @@ void *native_test_malloc(size_t size)
 void *native_test_calloc(size_t count, size_t size)
 {
     void *p;
-    if (size && count > SIZE_MAX / size) { return NULL; }
+    if (size && count > SIZE_MAX / size) {
+        return NULL;
+    }
     p = native_test_malloc(count * size);
-    if (p) { memset(p, 0, count * size); }
+    if (p) {
+        memset(p, 0, count * size);
+    }
     return p;
 }
 void native_test_free(void *p)
@@ -55,14 +65,22 @@ void native_test_free(void *p)
 }
 size_t native_test_fread(void *p, size_t size, size_t count, FILE *f)
 {
-    if (reads == 0) { return 0; }
-    if (reads > 0) { reads--; }
+    if (reads == 0) {
+        return 0;
+    }
+    if (reads > 0) {
+        reads--;
+    }
     return fread(p, size, count, f);
 }
 int native_test_fseek(FILE *f, long offset, int whence)
 {
-    if (seeks == 0) { return -1; }
-    if (seeks > 0) { seeks--; }
+    if (seeks == 0) {
+        return -1;
+    }
+    if (seeks > 0) {
+        seeks--;
+    }
     return fseek(f, offset, whence);
 }
 long native_test_ftell(FILE *f)
@@ -83,7 +101,9 @@ int native_test_read(const char *path, flux_capture_t **capture)
 #else
     file = fopen(path, "rb");
 #endif
-    if (!file) { return FLUX_IO; }
+    if (!file) {
+        return FLUX_IO;
+    }
     rc = scp_file_read(file, capture);
     fclose(file);
     return rc;

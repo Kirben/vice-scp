@@ -37,9 +37,14 @@
 #include "cmdline.h"
 #include "diskimage.h"
 #include "diskimage/fsimage.h"
+#include "diskimage/fsimage-scp.h"
 #include "drive/rotation-flux.h"
+#include "drive/rotation.h"
+#include "drive/iec/wd1770.h"
+#include "drive/iec/pc8477.h"
 #include "driveimage.h"
 #include "drive.h"
+#include "drive-check.h"
 #include "fsdevice.h"
 #include "fsimage.h"
 #include "fliplist.h"
@@ -76,16 +81,17 @@ static file_system_t file_system[NUM_DISK_UNITS];
 
 static log_t attach_log = LOG_DEFAULT;
 
+static int scp_multirev_write;
 static int attach_device_readonly_enabled[NUM_DISK_UNITS][NUM_DRIVES];
 static int file_system_device_enabled[NUM_DISK_UNITS] = { -1, -1, -1, -1 };
 
 static int set_attach_device_readonly(int val, void *param);
 static int set_file_system_device(int val, void *param);
 
-static void vdrive_detach_disk_image_and_free(vdrive_t *vdrive,
+static int vdrive_detach_disk_image_and_free(vdrive_t *vdrive,
                                               unsigned int unit,
                                               unsigned int drive);
-static void detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
+static int detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
                                        unsigned int unit, unsigned int drive);
 static void detach_disk_image(disk_image_t *image, vdrive_t *vdrive,
                               unsigned int unit, unsigned int drive);
@@ -98,7 +104,15 @@ static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
 #define GET_UNIT(du)                    ((du >> 8) & 0xFF)
 #define GET_DRIVE(du)                   (du & 0xFF)
 
+static int set_scp_multirev_write(int value, void *param)
+{
+    scp_multirev_write = !!value;
+    return 0;
+}
+
 static const resource_int_t resources_int[] = {
+    { "SCPMultiRevWrite", 0, RES_EVENT_SAME, NULL,
+      &scp_multirev_write, set_scp_multirev_write, NULL },
     { "AttachDevice8d0Readonly", 0, RES_EVENT_SAME, NULL,
       &attach_device_readonly_enabled[0][0],
       set_attach_device_readonly, (void *)UNIT_AND_DRIVE(8,0) },
@@ -151,6 +165,12 @@ int file_system_resources_init(void)
 
 static const cmdline_option_t cmdline_options[] =
 {
+    { "-scpmultirevwrite", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "SCPMultiRevWrite", (resource_value_t)1,
+      NULL, "Allow saving to compatible multi-revolution SCP images" },
+    { "+scpmultirevwrite", SET_RESOURCE, CMDLINE_ATTRIB_NONE,
+      NULL, NULL, "SCPMultiRevWrite", (resource_value_t)0,
+      NULL, "Protect multi-revolution SCP images from writes" },
     { "-devicebackend8", SET_RESOURCE, CMDLINE_ATTRIB_NEED_ARGS,
       NULL, NULL, "FileSystemDevice8", (void *)ATTACH_DEVICE_FS,
       "<Type>", "Set device type for device #8 (0: None, 1: Filesystem, 2: OpenCBM)" },
@@ -374,9 +394,11 @@ static int set_attach_device_readonly(int value, void *param)
 
     image = file_system_get_image(unit, drive);
     if (image != NULL && image->type == DISK_IMAGE_TYPE_SCP) {
-        /* SCP protection is intrinsic, independent of the preference for
-           future attachments. In particular an embedded capture has no file
-           to reopen, and a live cursor must not be reset by this setting. */
+        /* Keep a mounted SCP's protection fixed until it is detached. */
+        if (!image->read_only) {
+            log_error(attach_log, "Detach the writable SCP image before changing write protection.");
+            return -1;
+        }
         attach_device_readonly_enabled[unit - 8][drive] = val;
         return 0;
     }
@@ -502,7 +524,9 @@ static int set_file_system_device(int val, void *param)
         case ATTACH_DEVICE_FS:
             DBG(("set_file_system_device: new == ATTACH_DEVICE_FS"));
             for (drive = 0; drive < NUM_DRIVES; drive++) {
-                vdrive_detach_disk_image_and_free(vdrive, unit, drive);
+                if (vdrive_detach_disk_image_and_free(vdrive, unit, drive) < 0) {
+                    return -1;
+                }
                 ui_display_drive_current_image(idx, drive, "");
 #if 0
                 vdrive_device_setup_if_no_image(vdrive, unit, drive);
@@ -515,7 +539,9 @@ static int set_file_system_device(int val, void *param)
         case ATTACH_DEVICE_REAL:
             DBG(("set_file_system_device: new == ATTACH_DEVICE_REAL"));
             for (drive = 0; drive < NUM_DRIVES; drive++) {
-                vdrive_detach_disk_image_and_free(vdrive, unit, drive);
+                if (vdrive_detach_disk_image_and_free(vdrive, unit, drive) < 0) {
+                    return -1;
+                }
                 ui_display_drive_current_image(idx, drive, "");
 #if 0
                 vdrive_device_setup(vdrive, unit, drive);
@@ -567,19 +593,50 @@ static void detach_disk_image(disk_image_t *image, vdrive_t *vdrive,
     disk_image_media_destroy(image);
 }
 
-static void vdrive_detach_disk_image_and_free(vdrive_t *vdrive,
+static int flush_attached_scp(disk_image_t *image, unsigned int unit,
+                              unsigned int drive, int notify)
+{
+    drive_t *dptr;
+    char *recovery = NULL;
+    int result;
+
+    if (image == NULL || image->type != DISK_IMAGE_TYPE_SCP || image->read_only) {
+        return 0;
+    }
+    dptr = diskunit_context[unit - 8]->drives[drive];
+    if (flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_MFM) {
+        if (dptr->diskunit->type == DRIVE_TYPE_1581) {
+            wd1770_flush_scp(dptr->diskunit);
+        } else {
+            pc8477_flush_scp(dptr->diskunit);
+        }
+    } else {
+        rotation_rotate_disk(dptr);
+        rotation_flux_finish_write(dptr);
+    }
+    result = fsimage_scp_flush(image, &recovery);
+    if (notify) {
+        if (result < 0) {
+            ui_error("Could not save SCP changes. The disk is still attached.");
+        } else if (recovery != NULL) {
+            ui_error("The SCP image was not replaced. Saved changes are in %s.", recovery);
+        }
+    }
+    lib_free(recovery);
+    return result < 0 ? -1 : 0;
+}
+
+static int vdrive_detach_disk_image_and_free(vdrive_t *vdrive,
                                               unsigned int unit,
                                               unsigned int drive)
 {
     disk_image_t *image;
 
     image = vdrive_get_image(vdrive, drive);
-    if (image != NULL) {
-        detach_disk_image_and_free(image, vdrive, unit, drive);
-    }
+    return image != NULL ? detach_disk_image_and_free(image, vdrive, unit, drive) : 0;
 }
 
-static void detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
+static int detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
                                        unsigned int unit, unsigned int drive)
 {
     disk_image_t *oldimg;
@@ -587,7 +644,10 @@ static void detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
     oldimg = vdrive_get_image(vdrive, drive);
 
     if (!oldimg) {
-        return;
+        return 0;
+    }
+    if (flush_attached_scp(oldimg, unit, drive, 1) < 0) {
+        return -1;
     }
 
     detach_disk_image(image, vdrive, unit, drive);
@@ -595,11 +655,13 @@ static void detach_disk_image_and_free(disk_image_t *image, vdrive_t *vdrive,
     if ((image != NULL) && (image == oldimg)) {
         disk_image_destroy(image);
     }
+    return 0;
 }
 
-int probe_disk_image(const char *filename)
+int probe_disk_image_type(const char *filename, unsigned int *type)
 {
     disk_image_t new_image;
+    int rc;
 
     new_image.gcr = NULL;
     new_image.p64 = lib_calloc(1, sizeof(TP64Image));
@@ -610,7 +672,12 @@ int probe_disk_image(const char *filename)
     disk_image_media_create(&new_image);
     disk_image_fsimage_name_set(&new_image, filename);
 
-    if (fsimage_open_probe(&new_image) < 0) {
+    new_image.type = DISK_IMAGE_TYPE_UNKNOWN;
+    rc = fsimage_open_probe(&new_image);
+    if (type != NULL) {
+        *type = new_image.type;
+    }
+    if (rc < 0) {
         P64ImageDestroy((PP64Image) new_image.p64);
         lib_free(new_image.p64);
         disk_image_media_destroy(&new_image);
@@ -622,28 +689,111 @@ int probe_disk_image(const char *filename)
     return 1;
 }
 
+int probe_disk_image(const char *filename)
+{
+    return probe_disk_image_type(filename, NULL);
+}
+
 static int attach_native_image(disk_image_t *image, vdrive_t *vdrive,
                                unsigned int unit, unsigned int drive)
 {
     int traps;
     rotation_flux_t checked = {0};
+    unsigned int flags = flux_capture_flags(disk_image_flux_capture_get(image));
     drive_t *dptr;
+    int ieee;
+    int flip;
 
-    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive != 0) {
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive >= NUM_DRIVES) {
         return -1;
     }
     dptr = diskunit_context[unit - 8]->drives[drive];
-    if (!dptr->true_emulation || drive_check_image_format(DISK_IMAGE_TYPE_SCP, unit - 8) < 0
+    ieee = drive_check_scp_ieee(dptr->diskunit->type);
+    if ((drive && (!ieee || !drive_check_dual(dptr->diskunit->type))) || !dptr->true_emulation || drive_check_image_format(DISK_IMAGE_TYPE_SCP, unit - 8) < 0
         || resources_get_int_sprintf("TrapDevice%u", &traps, unit) < 0 || traps
         || rotation_flux_bind(&checked, disk_image_flux_capture_get(image), 0) != FLUX_OK) {
-        log_error(attach_log, "SCP requires a 1541/1541-II, true-drive emulation and disabled device traps.");
+        log_error(attach_log, "SCP requires a 1540, 1541, 1541-II, 1551, 1570, 1571, 1571CR, 1581, 2031, 2040, 3040, 4040, 8050, 8250, SFD-1001, FD-2000 or FD-4000 with true-drive emulation and disabled device traps.");
         return -1;
     }
-    detach_disk_image_and_free(vdrive_get_image(vdrive, drive), vdrive, unit, drive);
+    {
+        unsigned int blank_flags = 0;
+        switch (dptr->diskunit->type) {
+            case DRIVE_TYPE_1571:
+            case DRIVE_TYPE_1571CR:
+                if (!drive_flux_align_halftrack(unit - 8)) {
+                    blank_flags = FLUX_CAPTURE_DOUBLE_SIDED;
+                }
+                break;
+            case DRIVE_TYPE_8050:
+                blank_flags = FLUX_CAPTURE_8X50;
+                break;
+            case DRIVE_TYPE_8250:
+            case DRIVE_TYPE_1001:
+                blank_flags = FLUX_CAPTURE_8X50 | FLUX_CAPTURE_DOUBLE_SIDED;
+                break;
+            case DRIVE_TYPE_1581:
+                blank_flags = FLUX_CAPTURE_MFM;
+                break;
+            case DRIVE_TYPE_2000:
+                blank_flags = FLUX_CAPTURE_MFM | FLUX_CAPTURE_MFM_HD;
+                break;
+            case DRIVE_TYPE_4000:
+                blank_flags = FLUX_CAPTURE_MFM | FLUX_CAPTURE_MFM_ED;
+                break;
+        }
+        if (blank_flags & FLUX_CAPTURE_MFM) {
+            int density;
+            static const unsigned int density_flags[] = {0, 0, FLUX_CAPTURE_MFM_HD, FLUX_CAPTURE_MFM_ED};
+            if (resources_get_int_sprintf("Drive%uSCPBlankDensity", &density, unit) == 0 && density > 0) {
+                blank_flags = FLUX_CAPTURE_MFM | density_flags[density];
+            }
+        }
+        if (fsimage_scp_prepare_blank(image, blank_flags) != FLUX_OK) {
+            return -1;
+        }
+        flags = flux_capture_flags(disk_image_flux_capture_get(image));
+    }
+    if ((flags & FLUX_CAPTURE_TOP_ONLY)
+        && (dptr->diskunit->type == DRIVE_TYPE_1541 || dptr->diskunit->type == DRIVE_TYPE_1541II)) {
+        if (resources_get_int_sprintf("Drive%uSCPFlip", &flip, unit) < 0 || !flip) {
+            log_error(attach_log, "Enable the SCP flip option on unit %u to mount this top-side capture on the 1541.", unit);
+            return -1;
+        }
+        if (fsimage_scp_flip_gcr(image) != FLUX_OK) {
+            log_error(attach_log, "Could not flip this top-side SCP for 1541 playback.");
+            return -1;
+        }
+        flags = flux_capture_flags(disk_image_flux_capture_get(image));
+    }
+    if ((flags & FLUX_CAPTURE_MFM)
+        ? !drive_check_scp_mfm(dptr->diskunit->type, flags)
+        : (!drive_check_scp_gcr(dptr->diskunit->type, flags)
+           || drive_check_scp_mfm(dptr->diskunit->type, FLUX_CAPTURE_MFM))) {
+        log_error(attach_log, "SCP capture encoding or density is incompatible with the configured drive.");
+        return -1;
+    }
+    if (!ieee && (flags & FLUX_CAPTURE_DOUBLE_SIDED)
+        && (drive_get_num_heads(dptr->diskunit->type) < 2 || drive_flux_align_halftrack(unit - 8))) {
+        log_error(attach_log, "Double-sided GCR SCP requires a 1571 or 1571CR with flux alignment disabled.");
+        return -1;
+    }
+    if (detach_disk_image_and_free(vdrive_get_image(vdrive, drive), vdrive, unit, drive) < 0) {
+        return -1;
+    }
     if (drive_image_attach(image, unit, drive) < 0) {
         return -1;
     }
+    if (ieee || (flags & FLUX_CAPTURE_MFM)) {
+        if (machine_drive_image_attach(image, unit, drive) < 0) {
+            machine_drive_image_detach(image, unit, drive);
+            drive_image_detach(image, unit, drive);
+            return -1;
+        }
+    }
     if (vdrive_attach_image(image, unit, drive, vdrive) < 0) {
+        if (ieee || (flags & FLUX_CAPTURE_MFM)) {
+            machine_drive_image_detach(image, unit, drive);
+        }
         drive_image_detach(image, unit, drive);
         return -1;
     }
@@ -651,12 +801,12 @@ static int attach_native_image(disk_image_t *image, vdrive_t *vdrive,
 }
 
 int file_system_attach_flux_capture(unsigned int unit, unsigned int drive,
-                                     flux_capture_t *capture)
+                                     flux_capture_t *capture, int read_only, int scaled)
 {
     disk_image_t *image;
     vdrive_t *vdrive;
     int rc;
-    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive != 0
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drive >= NUM_DRIVES
         || !flux_capture_is_sealed(capture)) {
         return -1;
     }
@@ -667,15 +817,24 @@ int file_system_attach_flux_capture(unsigned int unit, unsigned int drive,
     image = disk_image_create();
     image->device = DISK_IMAGE_DEVICE_FS;
     image->type = DISK_IMAGE_TYPE_SCP;
-    image->read_only = 1;
+    image->read_only = read_only;
     image->tracks = FLUX_CAPTURE_TRACKS / 2;
     image->max_half_tracks = FLUX_CAPTURE_TRACKS;
+    if (flux_capture_flags(capture) & FLUX_CAPTURE_8X50) {
+        image->tracks = (flux_capture_flags(capture) & FLUX_CAPTURE_DOUBLE_SIDED) ? 154 : 77;
+        image->max_half_tracks = 154;
+    }
     image->gcr = NULL;
     disk_image_media_create(image);
     disk_image_fsimage_name_set(image, "Embedded native flux");
     image->media.fsimage->flux = capture;
-    image->media.fsimage->flux_only = 1;
-    rc = attach_native_image(image, vdrive, unit, drive);
+    image->media.fsimage->flux_only = FSIMAGE_FLUX_EMBEDDED;
+    rc = fsimage_scp_prepare_embedded_write(image, scaled,
+        drive_check_scp_write(diskunit_context[unit - 8]->type, 0)
+        || drive_check_scp_ieee(diskunit_context[unit - 8]->type));
+    if (!rc) {
+        rc = attach_native_image(image, vdrive, unit, drive);
+    }
     if (rc < 0) {
         image->media.fsimage->flux = NULL; /* Caller retains ownership. */
         disk_image_media_destroy(image);
@@ -740,7 +899,7 @@ static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
             break;
     }
 
-    if (disk_image_open(&new_image) < 0) {
+    if (flush_attached_scp(oldimage, unit, drive, 1) < 0 || disk_image_open(&new_image) < 0) {
         P64ImageDestroy((PP64Image) new_image.p64);
         lib_free(new_image.p64);
         disk_image_media_destroy(&new_image);
@@ -748,6 +907,31 @@ static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
     }
 
     if (new_image.type == DISK_IMAGE_TYPE_SCP) {
+        if (!attach_device_readonly_enabled[unit - 8][drive]) {
+            const flux_capture_t *capture = disk_image_flux_capture_get(&new_image);
+            if (flux_capture_revolutions(capture) == 1) {
+                if (new_image.read_only) {
+                    fsimage_scp_enable_write(&new_image, 0, SCP_WRITE_CAPTURE_TIMING, 0, 0);
+                }
+            } else if (scp_multirev_write) {
+                unsigned int type = diskunit_context[unit - 8]->type;
+                scp_write_clock_t clock = SCP_WRITE_CAPTURE_TIMING;
+                int flip = 0;
+                int gcr_window_alignment = drive_check_scp_write(type, 0);
+                if (gcr_window_alignment) {
+                    clock = drive_flux_speed_mode(unit - 8) == 1
+                        ? SCP_WRITE_MEASURE_CAPTURE_CLOCK : SCP_WRITE_MEASURE_AUTO_CLOCK;
+                } else if (drive_check_scp_ieee(type)) {
+                    gcr_window_alignment = 1;
+                    clock = SCP_WRITE_MEASURE_AUTO_CLOCK;
+                }
+                if ((type == DRIVE_TYPE_1541 || type == DRIVE_TYPE_1541II)
+                    && (flux_capture_flags(capture) & FLUX_CAPTURE_TOP_ONLY)) {
+                    resources_get_int_sprintf("Drive%uSCPFlip", &flip, unit);
+                }
+                fsimage_scp_enable_write(&new_image, 1, clock, flip, gcr_window_alignment);
+            }
+        }
         image = disk_image_create();
         memcpy(image, &new_image, sizeof(*image));
         lib_free(new_image.p64);
@@ -760,7 +944,12 @@ static int attach_disk_image(disk_image_t *oldimage, vdrive_t *vdrive,
         return err;
     }
 
-    detach_disk_image_and_free(oldimage, vdrive, unit, drive);
+    if (detach_disk_image_and_free(oldimage, vdrive, unit, drive) < 0) {
+        P64ImageDestroy((PP64Image)new_image.p64);
+        lib_free(new_image.p64);
+        disk_image_media_destroy(&new_image);
+        return -1;
+    }
 
     image = disk_image_create();
 
@@ -837,7 +1026,7 @@ int file_system_attach_disk(unsigned int unit, unsigned int drive, const char *f
     return file_system_attach_disk_internal(unit, drive, filename);
 }
 
-static void file_system_detach_disk_single(unsigned int unit, unsigned int drive)
+static int file_system_detach_disk_single(unsigned int unit, unsigned int drive)
 {
     vdrive_t *vdrive;
     disk_image_t *image;
@@ -845,9 +1034,12 @@ static void file_system_detach_disk_single(unsigned int unit, unsigned int drive
     vdrive = file_system_get_vdrive(unit);
     image = vdrive_get_image(vdrive, drive);
     if (image) {
-        detach_disk_image_and_free(image, vdrive, unit, drive);
+        if (detach_disk_image_and_free(image, vdrive, unit, drive) < 0) {
+            return -1;
+        }
         ui_display_drive_current_image(unit - 8, drive, "");
     }
+    return 0;
 }
 
 static void file_system_detach_disk_internal(unsigned int unit, unsigned int drive)
@@ -855,7 +1047,9 @@ static void file_system_detach_disk_internal(unsigned int unit, unsigned int dri
     char event_data[2];
 
     if ((unit >= 8) && (unit < 8 + NUM_DISK_UNITS)) {
-        file_system_detach_disk_single(unit, drive);
+        if (file_system_detach_disk_single(unit, drive) < 0) {
+            return;
+        }
         file_system_set_serial_hooks(unit, ATTACH_DEVICE_FS);
     } else {
         log_error(attach_log, "Cannot detach unit %u drive %u.", unit, drive);
@@ -914,7 +1108,7 @@ void file_system_detach_disk_shutdown(void)
             vdrive = file_system_get_vdrive(i + 8);
             for (j = 0; j < NUM_DRIVES; j++) {
                 image = vdrive_get_image(vdrive, j);
-                if (image) {
+                if (image && flush_attached_scp(image, i + 8, j, 0) == 0) {
                     detach_disk_image_and_free(image, vdrive, i + 8, j);
                 }
             }

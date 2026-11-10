@@ -1089,6 +1089,11 @@ UI_MENU_DEFINE_TOGGLE(AttachDevice9d1Readonly)
 UI_MENU_DEFINE_TOGGLE(AttachDevice10d1Readonly)
 UI_MENU_DEFINE_TOGGLE(AttachDevice11d1Readonly)
 
+UI_MENU_DEFINE_TOGGLE(Drive8SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive9SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive10SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive11SCPFlip)
+
 UI_MENU_DEFINE_TOGGLE(Drive8TrueEmulation)
 UI_MENU_DEFINE_TOGGLE(Drive9TrueEmulation)
 UI_MENU_DEFINE_TOGGLE(Drive10TrueEmulation)
@@ -1107,7 +1112,10 @@ UI_MENU_DEFINE_STRING(Drive11FixedSize)
 static UI_MENU_CALLBACK(scp_media_status_callback)
 {
     disk_image_t *image = file_system_get_image(vice_ptr_to_int(param), 0);
-    return image && image->type == DISK_IMAGE_TYPE_SCP ? "Read only" : "Not attached";
+    if (!image || image->type != DISK_IMAGE_TYPE_SCP) {
+        return "Not attached";
+    }
+    return image->read_only ? "Read only" : "Writable";
 }
 
 /* CAUTION: the position of the menu items is hardcoded in uidrive_menu_create() */
@@ -1188,6 +1196,9 @@ static UI_MENU_CALLBACK(scp_media_status_callback)
             .type     = MENU_ENTRY_OTHER,                                       \
             .callback = scp_media_status_callback,                              \
             .data     = (ui_callback_data_t)(x) },                              \
+/* 22 */{   .string   = "Flip top-side SCP on next 1541 mount",                  \
+            .type     = MENU_ENTRY_RESOURCE_TOGGLE,                             \
+            .callback = toggle_Drive##x##SCPFlip_callback },                    \
         SDL_MENU_LIST_END                                                       \
     };
 

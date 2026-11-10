@@ -51,31 +51,41 @@ FILE *zfile_fopen(const char *name, const char *mode)
     opens++;
     if (strchr(mode, '+')) { writable++; if (writable_fail) { return NULL; } }
 #ifdef _WIN32
-    wchar_t path[32768], modes[16];
+    wchar_t path[32768];
+    wchar_t modes[16];
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, path, 32768)
         || !MultiByteToWideChar(CP_UTF8, 0, mode, -1, modes, 16)) { return NULL; }
     f = _wfopen(path, modes);
 #else
     f = fopen(name, mode);
 #endif
-    if (f) { active++; }
+    if (f) {
+        active++;
+    }
     return f;
 }
 int zfile_fclose(FILE *f) { closes++; active--; return fclose(f); }
 int archdep_stat(const char *name, size_t *size, unsigned int *isdir)
 {
     struct stat st;
-    if (stat(name, &st)) { return -1; }
+    if (stat(name, &st)) {
+        return -1;
+    }
     *size = (size_t)st.st_size;
     *isdir = (st.st_mode & S_IFDIR) != 0;
     return 0;
 }
 off_t archdep_file_size(FILE *f)
 {
-    long pos = ftell(f), size;
-    if (fseek(f, 0, SEEK_END)) { return -1; }
+    long pos = ftell(f);
+    long size;
+    if (fseek(f, 0, SEEK_END)) {
+        return -1;
+    }
     size = ftell(f);
-    if (fseek(f, pos, SEEK_SET)) { return -1; }
+    if (fseek(f, pos, SEEK_SET)) {
+        return -1;
+    }
     return size;
 }
 int archdep_fseeko(FILE *f, off_t offset, int origin) { return fseek(f, (long)offset, origin); }

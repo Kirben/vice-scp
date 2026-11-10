@@ -40,7 +40,9 @@ static uint32_t scramble(uint32_t *value)
 void electronics_init(uint32_t seed, unsigned int zone, int reading)
 {
     rotation_t *r = &rotation[0];
-    if (initialized) { P64ImageDestroy(&image); }
+    if (initialized) {
+        P64ImageDestroy(&image);
+    }
     memset(&unit, 0, sizeof(unit));
     memset(&drive, 0, sizeof(drive));
     memset(rotation, 0, sizeof(rotation));
@@ -83,7 +85,10 @@ void electronics_init(uint32_t seed, unsigned int zone, int reading)
 
 void electronics_finish(void)
 {
-    if (initialized) { P64ImageDestroy(&image); initialized = 0; }
+    if (initialized) {
+        P64ImageDestroy(&image);
+        initialized = 0;
+    }
 #ifndef NATIVE_REFERENCE_ONLY
     rotation_flux_unbind(&input);
 #endif
@@ -113,7 +118,8 @@ unsigned int electronics_state(uint64_t *out)
     rotation_t *r = &rotation[0];
     PP64PulseStream stream = &image.PulseStreams[0][2];
     int32_t at = stream->UsedFirst;
-    uint64_t hash = UINT64_C(14695981039346656037), count = 0;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    uint64_t count = 0;
     while (at >= 0) {
         hash = (hash ^ stream->Pulses[at].Position) * UINT64_C(1099511628211);
         hash = (hash ^ stream->Pulses[at].Strength) * UINT64_C(1099511628211);
@@ -153,7 +159,9 @@ void electronics_drive_motor(int motor)
 {
     rotation_rotate_disk(&drive);
     drive.byte_ready_active = (drive.byte_ready_active & ~BRA_MOTOR_ON) | (motor ? BRA_MOTOR_ON : 0);
-    if (motor) { rotation_begins(&drive); }
+    if (motor) {
+        rotation_begins(&drive);
+    }
 }
 void electronics_drive_reset(void) { rotation_reset(&drive); }
 void electronics_wobble(int rpm, int amplitude)
@@ -174,9 +182,13 @@ void electronics_flux_state(flux_playback_state_t *state, unsigned int *phase)
 int electronics_restore(const flux_capture_t *capture, const flux_playback_state_t *state, unsigned int phase)
 {
     int rc;
-    if (phase >= 5) { return FLUX_INVALID; }
+    if (phase >= 5) {
+        return FLUX_INVALID;
+    }
     rc = flux_playback_restore(&input.playback, capture, state);
-    if (!rc) { input.reference_phase = phase; }
+    if (!rc) {
+        input.reference_phase = phase;
+    }
     return rc;
 }
 int electronics_invalid(unsigned int which)

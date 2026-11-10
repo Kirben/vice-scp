@@ -17,7 +17,8 @@ def block(data):
     return ''.join(format(ENCODE[b >> 4], '05b') + format(ENCODE[b & 15], '05b') for b in data)
 
 
-def sector(payload, track=1, sector=0, header_bad=False, data_bad=False, symbol_bad=False):
+def sector(payload, track=1, sector=0, header_bad=False, data_bad=False, symbol_bad=False,
+           padding_bad=False):
     header = [8, sector ^ track ^ 1 ^ 2 ^ int(header_bad), sector, track, 1, 2, 15, 15]
     check = 0
     for b in payload:
@@ -25,6 +26,8 @@ def sector(payload, track=1, sector=0, header_bad=False, data_bad=False, symbol_
     encoded = block([7] + list(payload) + [check ^ int(data_bad), 0, 0])
     if symbol_bad:
         encoded = encoded[:100] + '00000' + encoded[105:]
+    if padding_bad:
+        encoded = encoded[:-20] + '00000' + encoded[-15:]
     return '1' * 40 + block(header) + '0101' * 18 + '1' * 40 + encoded + '0101' * 20
 
 
@@ -91,6 +94,7 @@ check('scaled_360_later_good_turn', [sector(other, data_bad=True), good], payloa
 check('bad_header_checksum', [sector(payload, header_bad=True)], expected=27)
 check('bad_data_checksum', [sector(payload, data_bad=True)], expected=23)
 check('invalid_gcr_symbol', [sector(payload, symbol_bad=True)], expected=24)
+check('invalid_gcr_in_data_padding', [sector(payload, padding_bad=True)], payload=payload)
 check('wrong_header_track', [sector(payload, track=2)], expected=20)
 check('missing_track', [good], read_track=2, expected=20)
 check('missing_sector', [good], sector_no=1, expected=20)

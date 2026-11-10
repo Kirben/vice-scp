@@ -37,6 +37,8 @@
 #include "diskimage.h"
 #include "drive.h"
 #include "snapshot.h"
+#include "../../diskimage/flux-view.h"
+#include "../../diskimage/fsimage-scp.h"
 
 /* 3.5" mechs are usually specified for 80 physical tracks. However, using track
    81 is usually no problem at all on any combination of mech and disk. Often
@@ -76,6 +78,7 @@ struct fd_drive_s {
     int disk_rate;
     int image_sectors;
     unsigned int index_count;
+    unsigned int flux_revolution;
     /*int write_beyond;*/ /* flag to see if we writing D?M data to a D81 image */
     drive_t *drive;
     struct disk_image_s *image;
@@ -84,6 +87,9 @@ struct fd_drive_s {
         int size;
         int track_head;
         int dirty;
+        int phase;
+        unsigned int first_written;
+        unsigned int written;
         uint8_t *data;
         uint8_t *sync;
     } raw;
@@ -208,11 +214,17 @@ void fdd_image_attach(fd_drive_t *drv, struct disk_image_s *image)
             drv->image_sectors = 40;
             break;
     }
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        unsigned int flags = flux_capture_flags(disk_image_flux_capture_get(image));
+        drv->disk_rate = (flags & FLUX_CAPTURE_MFM_ED) ? 3 : (flags & FLUX_CAPTURE_MFM_HD) ? 0 : 2;
+    }
     drv->raw.size = 25 * fdd_data_rates[drv->disk_rate];
     drv->raw.data = lib_malloc((size_t)(drv->raw.size));
     drv->raw.sync = lib_calloc(1, (size_t)((drv->raw.size + 7) >> 3));
     drv->raw.track_head = -1;
+    drv->flux_revolution = 0;
     drv->raw.dirty = 0;
+    drv->raw.phase = -1;
     drv->raw.head = 0;
     /*drv->write_beyond = 0;*/
 
@@ -273,6 +285,23 @@ static void fdd_flush_raw(fd_drive_t *drv)
         return;
     }
     drv->raw.dirty = 0;
+
+    if (drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        const flux_capture_t *capture = disk_image_flux_capture_get(drv->image);
+        flux_capture_t *replacement = NULL;
+        unsigned int slot = (unsigned int)drv->raw.track_head ^ drv->head_invert;
+        int rc = flux_mfm_write_track(capture, slot, drv->raw.size, drv->raw.data,
+                                      drv->raw.sync, drv->flux_revolution, drv->raw.phase,
+                                      drv->raw.first_written, drv->raw.written, &replacement);
+        if (rc == FLUX_OK) {
+            fsimage_scp_adopt_write(drv->image, replacement);
+        } else {
+            drv->write_protect = 1;
+            fsimage_scp_abort_write(drv->image);
+            log_error(LOG_DEFAULT, "Could not commit SCP MFM track %u (%d).", slot, rc);
+        }
+        return;
+    }
 
     if (drv->raw.track_head / 2 < drv->tracks && drv->image) {
 #ifdef FDD_DEBUG
@@ -450,6 +479,14 @@ static void fdd_update_raw(fd_drive_t *drv)
     memset(drv->raw.data, 0x4e, (size_t)(drv->raw.size));
     memset(drv->raw.sync, 0, (size_t)((drv->raw.size + 7) >> 3));
 
+    if (drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        const flux_capture_t *capture = disk_image_flux_capture_get(drv->image);
+        unsigned int slot = drv->track * 2 + (drv->head ^ drv->head_invert);
+        flux_mfm_decode(flux_capture_track(capture, slot),
+                        drv->flux_revolution % flux_capture_revolutions(capture),
+                        drv->raw.size, drv->raw.data, drv->raw.sync, &drv->raw.phase);
+        return;
+    }
     if (drv->track < drv->tracks && drv->image) {
         i = (drv->track * 2 + (drv->head ^ drv->head_invert)) * drv->sectors;
         i <<= drv->sector_size - 1;
@@ -556,6 +593,20 @@ static void fdd_update_raw(fd_drive_t *drv)
     }
 }
 
+static void fdd_count_turns(fd_drive_t *drv, uint64_t turns)
+{
+    drv->index_count += (unsigned int)turns;
+    if (turns && drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        unsigned int revs = flux_capture_revolutions(disk_image_flux_capture_get(drv->image));
+        if (turns % revs) {
+            /* The dirty byte stream still belongs to the previous turn. */
+            fdd_flush_raw(drv);
+            drv->flux_revolution = (drv->flux_revolution + turns % revs) % revs;
+            drv->raw.track_head = -1;
+        }
+    }
+}
+
 uint64_t fdd_rotate(fd_drive_t *drv, uint64_t bytes_in)
 {
     uint64_t bytes;
@@ -566,10 +617,10 @@ uint64_t fdd_rotate(fd_drive_t *drv, uint64_t bytes_in)
 
     for (bytes = bytes_in; bytes > INT32_MAX; bytes -= INT32_MAX)
     {
-        drv->index_count += (drv->raw.head + INT32_MAX) / drv->raw.size;
-        drv->raw.head = (drv->raw.head + INT32_MAX) % drv->raw.size;
+        fdd_count_turns(drv, ((uint64_t)drv->raw.head + INT32_MAX) / drv->raw.size);
+        drv->raw.head = ((uint64_t)drv->raw.head + INT32_MAX) % drv->raw.size;
     }
-    drv->index_count += (drv->raw.head + bytes) / drv->raw.size;
+    fdd_count_turns(drv, (drv->raw.head + bytes) / drv->raw.size);
     drv->raw.head = (drv->raw.head + bytes) % drv->raw.size;
 
     return bytes_in;
@@ -612,7 +663,10 @@ int fdd_write_protect(fd_drive_t *drv)
     if (!drv) {
         return 0;
     }
-    return drv->write_protect;
+    return drv->write_protect
+        || (drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP
+            && !flux_capture_slot_writable(disk_image_flux_capture_get(drv->image),
+                                           drv->track * 2 + (drv->head ^ drv->head_invert)));
 }
 
 int fdd_disk_change(fd_drive_t *drv)
@@ -628,7 +682,7 @@ uint16_t fdd_read(fd_drive_t *drv)
     uint16_t data;
     int p;
 
-    if (!drv || !drv->motor) {
+    if (!drv || !drv->motor || !drv->image) {
         return 0;
     }
     p = drv->raw.head;
@@ -645,7 +699,7 @@ uint16_t fdd_read(fd_drive_t *drv)
     p++;
     if (p >= drv->raw.size) {
         p = 0;
-        drv->index_count++;
+        fdd_count_turns(drv, 1);
     }
     drv->raw.head = p;
     return data;
@@ -655,13 +709,27 @@ int fdd_write(fd_drive_t *drv, uint16_t data)
 {
     int p;
 
-    if (!drv || !drv->motor) {
+    if (!drv || !drv->motor || !drv->image
+        || (drv->image->type == DISK_IMAGE_TYPE_SCP && fdd_write_protect(drv))) {
         return -1;
     }
     fdd_update_raw(drv);
 
     p = drv->raw.head;
     if (drv->disk_rate == drv->rate) {
+        if (drv->image->type == DISK_IMAGE_TYPE_SCP) {
+            if (drv->raw.dirty && p != drv->raw.first_written + drv->raw.written) {
+                fdd_flush_raw(drv);
+                if (drv->write_protect) {
+                    return -1;
+                }
+            }
+            if (!drv->raw.dirty) {
+                drv->raw.first_written = p;
+                drv->raw.written = 0;
+            }
+            ++drv->raw.written;
+        }
         drv->raw.data[p] = (uint8_t)data;
         if (data & 0x100) {
             drv->raw.sync[p >> 3] |= (uint8_t)(0x80 >> (p & 7));
@@ -673,7 +741,7 @@ int fdd_write(fd_drive_t *drv, uint16_t data)
     p++;
     if (p >= drv->raw.size) {
         p = 0;
-        drv->index_count++;
+        fdd_count_turns(drv, 1);
     }
     drv->raw.head = p;
     return 0;
@@ -779,13 +847,14 @@ void fdd_set_rate(fd_drive_t *drv, int rate)
 */
 
 #define FDD_SNAP_MAJOR 1
-#define FDD_SNAP_MINOR 0
+#define FDD_SNAP_MINOR 3
 
 int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s)
 {
     snapshot_module_t *m;
 
-    m = snapshot_module_create(s, drv->myname, FDD_SNAP_MAJOR, FDD_SNAP_MINOR);
+    int scp = drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP;
+    m = snapshot_module_create(s, drv->myname, FDD_SNAP_MAJOR, scp ? (drv->image->read_only ? 1 : 3) : 0);
 
     if (m == NULL) {
         return -1;
@@ -809,9 +878,14 @@ int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s)
         || SMW_B(m, (uint8_t)drv->disk_rate) < 0
         || SMW_DW(m, (uint32_t)drv->image_sectors) < 0
         || SMW_DW(m, (uint32_t)drv->index_count) < 0
-        || SMW_DW(m, (uint8_t)drv->raw.head) < 0
+        || SMW_DW(m, (uint32_t)drv->raw.head) < 0
         || SMW_B(m, (uint8_t)drv->raw.track_head) < 0
         || SMW_B(m, (uint8_t)drv->raw.dirty) < 0
+        || (scp && SMW_DW(m, drv->flux_revolution) < 0)
+        || (scp && !drv->image->read_only
+            && (SMW_B(m, (uint8_t)(drv->raw.phase + 1)) < 0
+                || SMW_DW(m, drv->raw.first_written) < 0
+                || SMW_DW(m, drv->raw.written) < 0))
         || SMW_BA(m, drv->raw.data, (unsigned int)drv->raw.size) < 0
         || SMW_BA(m, drv->raw.sync, (unsigned int)((drv->raw.size + 7) >> 3)) < 0) {
         snapshot_module_close(m);
@@ -826,6 +900,7 @@ int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s)
 int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
 {
     uint8_t vmajor, vminor;
+    int expected_rate = drv->disk_rate;
     snapshot_module_t *m;
 
     m = snapshot_module_open(s, drv->myname, &vmajor, &vminor);
@@ -865,6 +940,24 @@ int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
         return -1;
     }
 
+    if (vminor) {
+        if (!drv->image || drv->image->type != DISK_IMAGE_TYPE_SCP
+            || drv->write_protect != drv->image->read_only
+            || (drv->image->read_only ? vminor != 1 : vminor < 2)
+            || drv->raw.dirty > 1 || (drv->raw.dirty && (vminor < 2
+                || drv->raw.track_head >= FLUX_CAPTURE_MAX_TRACKS))
+            || drv->disk_rate != expected_rate
+            || drv->raw.head < 0 || drv->raw.head >= 25 * fdd_data_rates[expected_rate]
+            || SMR_DW_UINT(m, &drv->flux_revolution) < 0
+            || drv->flux_revolution >= flux_capture_revolutions(disk_image_flux_capture_get(drv->image))) {
+            snapshot_module_close(m);
+            return -1;
+        }
+    } else if (drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        snapshot_module_close(m);
+        return -1;
+    }
+
     if (drv->track < 0) {
         drv->track = 0;
     }
@@ -886,6 +979,21 @@ int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
     drv->raw.size = 25 * fdd_data_rates[drv->disk_rate];
     drv->raw.head %= drv->raw.size;
 
+    drv->raw.phase = -1;
+    drv->raw.first_written = 0;
+    drv->raw.written = drv->raw.dirty ? drv->raw.size : 0;
+    if (vminor >= 3) {
+        int phase;
+        if (SMR_B_INT(m, &phase) < 0 || phase > 16
+            || SMR_DW_UINT(m, &drv->raw.first_written) < 0
+            || SMR_DW_UINT(m, &drv->raw.written) < 0
+            || (drv->raw.dirty && (drv->raw.first_written >= drv->raw.size
+                || !drv->raw.written || drv->raw.written > drv->raw.size - drv->raw.first_written))) {
+            snapshot_module_close(m);
+            return -1;
+        }
+        drv->raw.phase = phase - 1;
+    }
     lib_free(drv->raw.data);
     drv->raw.data = lib_malloc((size_t)drv->raw.size);
     lib_free(drv->raw.sync);

@@ -30,7 +30,7 @@ class Scan(C.Structure):
 
 class Cursor(C.Structure):
     _fields_ = [('capture', PTR), ('track', PTR), ('state', State), ('scan', Scan),
-                ('pulse', U64), ('has_pulse', C.c_int)]
+                ('pulse', U64), ('physical_turn', U64), ('has_pulse', C.c_int)]
 
 
 class Event(C.Structure):
@@ -52,6 +52,7 @@ track = api('flux_capture_track', PTR, PTR, U32)
 is_sealed = api('flux_capture_is_sealed', C.c_int, PTR)
 revs = api('flux_capture_revolutions', U32, PTR)
 flags = api('flux_capture_flags', U32, PTR)
+uses_360 = api('flux_capture_uses_360_clock', C.c_int, PTR)
 word_count = api('flux_capture_words', C.c_size_t, PTR)
 bind = api('flux_playback_bind', C.c_int, C.POINTER(Cursor), PTR, U32)
 next_event = api('flux_playback_next_event', C.c_int, C.POINTER(Cursor), C.POINTER(Event))
@@ -153,6 +154,19 @@ class NativeTests(unittest.TestCase):
         value = Cursor()
         self.assertEqual(bind(C.byref(value), capture, halftrack), 0)
         return value
+
+    def test_indexed_rpm_inference_requires_consensus_without_changing_flags(self):
+        fast = ([13333332, 13333334], [], 2)
+        slow = ([16000000, 16000000], [], 2)
+        mixed = ([13333332, 16000000], [], 2)
+        tracks = {0: fast, 4: fast, 8: fast, 12: slow}
+        inferred = self.build_capture(tracks)
+        self.assertTrue(uses_360(inferred))
+        self.assertEqual(flags(inferred), 1)
+        self.assertEqual(self.cursor(inferred, 2).state.duration, 13333332)
+        self.assertFalse(uses_360(self.build_capture(tracks, indexed=0)))
+        self.assertFalse(uses_360(self.build_capture({0: fast, 4: fast})))
+        self.assertFalse(uses_360(self.build_capture({**tracks, 8: mixed})))
 
     def run_ticks(self, cursor, ticks, seed=None):
         randomizer = random.Random(seed) if seed is not None else None
@@ -365,7 +379,7 @@ class NativeTests(unittest.TestCase):
         cursor = self.cursor(cap)
         self.assertEqual(cursor.state.duration, 13333334)
         self.assertEqual(self.run_ticks(cursor, 13333334), [(6, 1), (14, 1), (13333334, 6)])
-        self.assertEqual(self.cursor(cap, 1).state.duration, 13333333)
+        self.assertEqual(self.cursor(cap, 1).state.duration, 13333332)
 
     def test_long_run_has_no_per_interval_rounding_drift(self):
         cap = self.build_capture({0: ([1001, 997], [1, 500, 501, 400], 1)})
@@ -401,7 +415,7 @@ class NativeTests(unittest.TestCase):
         cursor = self.cursor(cap)
         original = bytes(cursor)
         for key, value in [('duration', 0), ('duration', 99), ('phase', 16000000),
-                           ('motor', 2), ('inclusive', 2), ('halftrack', 84)]:
+                           ('motor', 2), ('inclusive', 2), ('halftrack', 168)]:
             state = State.from_buffer_copy(bytes(cursor.state))
             setattr(state, key, value)
             self.assertEqual(restore(C.byref(cursor), cap, C.byref(state)), -1)
@@ -464,7 +478,7 @@ class NativeTests(unittest.TestCase):
     def test_builder_invalid_revolution_counts(self):
         for count in [0, 256, 0xffffffff]:
             self.assertFalse(create(count, 1))
-        self.assertFalse(create(1, 4))
+        self.assertFalse(create(1, 1 << 31))
 
     def test_builder_rejects_duplicate_track(self):
         cap = self.build_capture({0: ([1000], [], 1)}, sealed=False)
@@ -473,7 +487,7 @@ class NativeTests(unittest.TestCase):
     def test_builder_rejects_word_limit_before_reading_input(self):
         cap = create(1, 1)
         self.captures.append(cap)
-        self.assertEqual(add(cap, 0, (U64 * 1)(1000), (C.c_uint16 * 1)(1), 32000001, 1), -3)
+        self.assertEqual(add(cap, 0, (U64 * 1)(1000), (C.c_uint16 * 1)(1), 180000001, 1), -3)
         self.assertFalse(track(cap, 0))
 
     def test_builder_rejects_zero_and_overflowing_durations(self):
