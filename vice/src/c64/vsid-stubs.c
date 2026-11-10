@@ -57,6 +57,11 @@
 #include "fsdevice.h"
 #include "fsdevice-filename.h"
 #include "fsimage.h"
+#include "diskimage/fsimage-scp.h"
+#include "drive/iec/pc8477.h"
+#include "drive/iec/wd1770.h"
+#include "drive/rotation-flux.h"
+#include "drive/rotation.h"
 #include "gfxoutput.h"
 #include "iecbus.h"
 #include "iecdrive.h"
@@ -782,6 +787,55 @@ int fsdevice_limit_namelength(vdrive_t *vdrive, uint8_t *name)
     diskimage
 *******************************************************************************/
 
+/* VSID links the shared attachment code without an emulated disk drive. */
+const flux_capture_t *disk_image_flux_capture_get(const disk_image_t *image)
+{
+    return NULL;
+}
+
+unsigned int flux_capture_flags(const flux_capture_t *capture)
+{
+    return 0;
+}
+
+int flux_capture_is_sealed(const flux_capture_t *capture)
+{
+    return 0;
+}
+
+unsigned int flux_capture_revolutions(const flux_capture_t *capture)
+{
+    return 0;
+}
+
+void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock_t clock,
+                             int flip, int gcr_window_alignment)
+{
+}
+
+int fsimage_scp_flip_gcr(disk_image_t *image)
+{
+    return FLUX_INVALID;
+}
+
+int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
+{
+    if (recovery_path != NULL) {
+        *recovery_path = NULL;
+    }
+    return -1;
+}
+
+int fsimage_scp_prepare_blank(disk_image_t *image, unsigned int flags)
+{
+    return FLUX_INVALID;
+}
+
+int fsimage_scp_prepare_embedded_write(disk_image_t *image, int scaled, int gcr_window_alignment)
+{
+    return FLUX_INVALID;
+}
+
 void disk_image_init(void)
 {
 }
@@ -971,6 +1025,59 @@ uint8_t iecbus_device_read(void)
 *******************************************************************************/
 
 diskunit_context_t *diskunit_context[NUM_DISK_UNITS];
+
+int drive_check_scp_gcr(unsigned int type, unsigned int flags)
+{
+    return 0;
+}
+
+int drive_check_scp_ieee(unsigned int type)
+{
+    return 0;
+}
+
+int drive_check_scp_mfm(unsigned int type, unsigned int flags)
+{
+    return 0;
+}
+
+int drive_check_scp_write(unsigned int type, unsigned int flags)
+{
+    return 0;
+}
+
+int drive_flux_align_halftrack(unsigned int unit_index)
+{
+    return 0;
+}
+
+int drive_flux_speed_mode(unsigned int unit_index)
+{
+    return 0;
+}
+
+void pc8477_flush_scp(diskunit_context_t *drv)
+{
+}
+
+int rotation_flux_bind(rotation_flux_t *input, const flux_capture_t *capture,
+                       unsigned int halftrack)
+{
+    return FLUX_INVALID;
+}
+
+int rotation_flux_finish_write(drive_t *drive)
+{
+    return FLUX_INVALID;
+}
+
+void rotation_rotate_disk(drive_t *dptr)
+{
+}
+
+void wd1770_flush_scp(diskunit_context_t *drv)
+{
+}
 
 void drive_setup_context(void)
 {
