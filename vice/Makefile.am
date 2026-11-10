@@ -44,6 +44,7 @@ COMMON_EXTRA_DIST = \
 	tests/native-flux/lifecycle-hooks.c \
 	tests/native-flux/test_lifecycle.py \
 	tests/native-flux/test-hooks.c \
+	tests/native-flux/test-write.c \
 	tests/native-flux/test_native_flux.py \
 	NEWS
 

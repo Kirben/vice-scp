@@ -21,13 +21,36 @@ geometries. The 1581 and CMD FD drives support compatible MFM captures.
 
 A compatible top-side-only capture can use its recorded head directly.
 On a 1541 or 1541-II, set -drive8scpflip before attachment to play a
-compatible top-side capture as a flipped disk. SCP images are mounted read-only.
+compatible top-side capture as a flipped disk. Writes use the original
+physical slots and sample grid.
 
 The automatic playback clock compensates for 360 RPM acquisition
 when appropriate. Set -drive8fluxspeed 1 before attachment to use the
 recorded clock. Set -drive8fluxalign to an odd half-track number to
 read its adjacent lower full-track capture. For example, 37 selects
 track 18.5. A mount using this alignment override is write protected.
+
+Writing and formatting
+----------------------
+
+Use an uncompressed, writable working copy. Single-revolution images
+require writable MODE. For eligible multi-revolution images, set
+-scpmultirevwrite before attaching. Explicit read-only mounts take
+precedence. c1541 provides a read-only sector view of compatible SCPs.
+
+The writer retains the sample grid, captured revolution count, declared
+track range, and original revolution payloads on untouched tracks.
+Supported metadata includes SCP 1.6 footers, the Greaseweazle 2.4 footer
+layout and a standard WRSP extension. Unknown extensions and resolutions
+above the controller limit are write protected. Interleaved 1571 images
+can store writes at full-track positions. Unindexed partial writes
+require a measured period or consistent alignment across the affected
+windows. Full formatting intentionally replaces flux in the formatted
+geometry.
+
+Detach the disk or exit normally to publish changes. If publication
+cannot proceed safely, VICE retains the backing file and reports the
+recovery image path when one can be created.
 
 Snapshots
 ---------

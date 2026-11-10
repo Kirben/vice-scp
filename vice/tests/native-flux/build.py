@@ -47,9 +47,17 @@ with (out / 'compile.log').open('w') as log:
         command += ['-fsanitize=undefined']
     commands.append(command)
     subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+    writer_test = out / ('test-write.exe' if windows else 'test-write')
+    writer_sources = [source / 'tests/native-flux/test-write.c']
+    writer_sources += [source / 'src/diskimage' / (name + '.c')
+                       for name in ('flux-capture', 'scp-reader', 'scp-writer')]
+    command = [args.cc] + flags + [str(file) for file in writer_sources] + ['-o', str(writer_test)]
+    commands.append(command)
+    subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
 version = subprocess.check_output([args.cc, '--version'], env=env, text=True).splitlines()[0]
 (out / 'compiler.txt').write_text(version + '\n' + repr(commands) + '\n')
 with (out / 'tests.log').open('w', encoding='utf-8') as log:
+    subprocess.run([str(writer_test)], env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
     p = subprocess.run([sys.executable, str(source / 'tests/native-flux/test_native_flux.py'),
                         str(library), str(out)], env=env, stdout=log, stderr=subprocess.STDOUT)
 print((out / 'tests.log').read_text(encoding='utf-8'))

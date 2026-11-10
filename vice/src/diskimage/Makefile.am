@@ -32,6 +32,8 @@ libdiskimage_a_SOURCES = \
 	flux-view.h \
 	scp-reader.c \
 	scp-reader.h \
+	scp-writer.c \
+	scp-writer.h \
 	fsimage-check.c \
 	fsimage-check.h \
 	fsimage-create.c \
