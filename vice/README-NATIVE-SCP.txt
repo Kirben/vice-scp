@@ -32,5 +32,21 @@ track 18.5. A mount using this alignment override is write protected.
 Snapshots
 ---------
 
-SCP snapshots are supported for GCR drives with a live flux cursor.
-Sector-backed SCP drives require separate snapshot support.
+Embedded snapshots restore the captured media in memory. An embedded
+writable disk has no backing SCP file. Include disks in a subsequent
+snapshot to retain further changes. For an external snapshot, attach
+matching media with matching write protection before restoring.
+
+Developer validation
+--------------------
+
+Run from the source's vice directory:
+
+  python tests/native-flux/build.py OUTPUT --cc PATH_TO_GCC
+  python tests/native-flux/build-lifecycle.py OUTPUT --configured-build BUILD --cc PATH_TO_GCC --include-dir PATH_TO_SDL2_HEADERS
+  python tests/native-flux/build-electronics.py OUTPUT --configured-build BUILD --cc PATH_TO_GCC
+  python tests/native-flux/test_native_drive.py NEW_OUTPUT --runtime RUNTIME
+
+The standalone suite includes the writer round-trip tests. The runtime
+suite uses an emulator package with ROMs and c1541 and generates its own
+disk images. See each script's --help for additional test options.

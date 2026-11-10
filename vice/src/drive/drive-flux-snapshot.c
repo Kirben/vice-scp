@@ -468,18 +468,97 @@ done:
     return rc;
 }
 
+/* FLUX 2.0 stores the read-only MFM medium. The controller and FDD modules
+   separately carry controller, mechanical position and byte stream. */
+/* Sector controllers have no live flux cursor. Store only the capture
+   identity and, optionally, the capture itself. */
+static int readonly_capture_valid(const flux_capture_t *capture, int mfm)
+{
+    unsigned int flags = flux_capture_flags(capture);
+    return flux_capture_is_sealed(capture)
+        && (flags & (FLUX_CAPTURE_MFM | FLUX_CAPTURE_DOUBLE_SIDED))
+           == (mfm ? FLUX_CAPTURE_MFM : (flags & FLUX_CAPTURE_8X50) ? flags & FLUX_CAPTURE_DOUBLE_SIDED : 0);
+}
+
 int drive_sector_flux_snapshot_write(snapshot_t *s, const drive_t *drive,
                                       unsigned int unit, unsigned int number, int embed, int mfm)
 {
-    snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
-    return -1;
+    char name[16];
+    uint8_t identity[20];
+    const flux_capture_t *capture = disk_image_flux_capture_get(drive->image);
+    snapshot_module_t *m;
+    int rc;
+
+    if (!drive->image || drive->read_only != drive->image->read_only || !readonly_capture_valid(capture, mfm)) {
+        return -1;
+    }
+    capture_identity(capture, identity);
+    snprintf(name, sizeof(name), "FLUX%u:%u", unit, number);
+    m = snapshot_module_create(s, name, mfm ? 2 : 3, !drive->read_only);
+    if (!m) {
+        return -1;
+    }
+    rc = SMW_B(m, embed != 0) < 0 || SMW_BA(m, identity, sizeof(identity)) < 0
+        || (embed && capture_write(m, capture) < 0);
+    return snapshot_module_close(m) < 0 || rc ? -1 : 0;
 }
 
 int drive_sector_flux_snapshot_read(snapshot_t *s, const drive_t *drive,
                                      unsigned int unit, unsigned int number, int mfm,
                                      int expected_embed, flux_capture_t **embedded)
 {
+    char name[16];
+    uint8_t major;
+    uint8_t minor;
+    uint8_t embed;
+    uint8_t expected[20];
+    uint8_t actual[20];
+    snapshot_module_t *m;
+    flux_capture_t *owned = NULL;
+    const flux_capture_t *capture;
+
     *embedded = NULL;
+    snprintf(name, sizeof(name), "FLUX%u:%u", unit, number);
+    m = snapshot_module_open(s, name, &major, &minor);
+    if (!m) {
+        goto fail;
+    }
+    if (major != (mfm ? 2 : 3) || minor != (unsigned int)!drive->read_only
+        || SMR_B(m, &embed) < 0 || embed > 1
+        || (expected_embed >= 0 && embed != expected_embed)
+        || SMR_BA(m, expected, sizeof(expected)) < 0) {
+        goto fail;
+    }
+    if (embed) {
+        owned = capture_read(m, mfm ? 0 : 4, mfm);
+        capture = owned;
+    } else {
+        capture = disk_image_flux_capture_get(drive->image);
+        if (!drive->image || drive->image->read_only != drive->read_only) {
+            goto fail;
+        }
+    }
+    if (!readonly_capture_valid(capture, mfm)) {
+        goto fail;
+    }
+    capture_identity(capture, actual);
+    if (memcmp(expected, actual, sizeof(actual))) {
+        goto fail;
+    }
+    if (snapshot_module_close(m) < 0) {
+        m = NULL;
+        goto fail;
+    }
+    *embedded = owned;
+    return 0;
+
+fail:
+    if (m) {
+        snapshot_module_close(m);
+    }
+    flux_capture_destroy(owned);
     snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+    log_error(drive->diskunit->log, "Invalid SCP snapshot or missing/mismatched capture on unit %u mechanism %u.",
+              unit, number);
     return -1;
 }
