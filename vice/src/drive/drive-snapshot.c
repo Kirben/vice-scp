@@ -759,6 +759,11 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 }
             }
         }
+        if (has_tde[unr] && !drive_check_bus(restored_type, IEC_BUS_IEC | IEC_BUS_IEEE | IEC_BUS_TCBM)) {
+            snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+            snapshot_module_close(m);
+            return -1;
+        }
         if (minor_version == 1 && drive_get_num_heads(restored_type) == 2
             && half_track[unr] > DRIVE_HALFTRACKS_1571 + 1) {
             native_side[unr] = 1;
