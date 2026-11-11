@@ -912,19 +912,24 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
 
     if (snapshot_changes_scp(s)) {
         for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
-            if (has_tde[unr] && !native_backend[unr] && restore_type[unr] == DRIVE_TYPE_1581) {
-                unit = diskunit_context[unr];
-                if (!unit->cia1581 || !unit->wd1770
+            if (!has_tde[unr] || native_backend[unr]) {
+                continue;
+            }
+            unit = diskunit_context[unr];
+            if (validate_gcr_controller(s, unit, restore_type[unr]) < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
+            }
+            if (restore_type[unr] == DRIVE_TYPE_1581
+                && (!unit->cia1581 || !unit->wd1770
                     || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
                     || wd1770_snapshot_validate_module(unit->wd1770, s) < 0
-                    || fdd_snapshot_validate(s, 4 * unr, NULL, 0) < 0) {
-                    return -1;
-                }
+                    || fdd_snapshot_validate(s, 4 * unr, NULL, 0) < 0)) {
+                return -1;
             }
-            if (has_tde[unr] && !native_backend[unr]
-                && (drive_snapshot_read_image_module(s, unr, 1) < 0
-                    || drive_snapshot_read_gcrimage_module(s, unr, 1) < 0
-                    || drive_snapshot_read_p64image_module(s, unr, 1) < 0)) {
+            if (drive_snapshot_read_image_module(s, unr, 1) < 0
+                || drive_snapshot_read_gcrimage_module(s, unr, 1) < 0
+                || drive_snapshot_read_p64image_module(s, unr, 1) < 0) {
                 return -1;
             }
         }
