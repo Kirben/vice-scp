@@ -531,6 +531,9 @@ static int lock_scp_publish(const char *path)
     char resolved[_MAX_PATH];
 #else
     char resolved[PATH_MAX];
+    struct stat backing_stat;
+    struct stat lock_stat;
+    mode_t mode;
 #endif
     char *name;
     int fd;
@@ -538,8 +541,18 @@ static int lock_scp_publish(const char *path)
     if (archdep_real_path(path, resolved) == NULL) {
         return -1;
     }
+#ifndef WINDOWS_COMPILE
+    if (stat(resolved, &backing_stat) < 0) {
+        return -1;
+    }
+    mode = backing_stat.st_mode & 0666;
+#endif
     name = lib_msprintf("%s.vice-lock", resolved);
+#ifdef WINDOWS_COMPILE
     fd = open(name, O_RDWR | O_CREAT, 0600);
+#else
+    fd = open(name, O_RDWR | O_CREAT, mode);
+#endif
     lib_free(name);
     if (fd < 0) {
         return -1;
@@ -554,6 +567,15 @@ static int lock_scp_publish(const char *path)
         }
     }
 #else
+    /* Also upgrade sidecars created by older builds when their owner saves. */
+    if (fstat(fd, &lock_stat) < 0
+        || (lock_stat.st_uid == geteuid()
+            && ((lock_stat.st_gid != backing_stat.st_gid
+                 && fchown(fd, (uid_t)-1, backing_stat.st_gid) < 0)
+                || ((lock_stat.st_mode & 0666) != mode && fchmod(fd, mode) < 0)))) {
+        close(fd);
+        return -1;
+    }
     {
         struct flock lock = {0};
         int result;
@@ -661,7 +683,12 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
             struct stat backing_stat;
 
             if (unchanged) {
+                struct stat publish_stat;
+
                 unchanged = fstat(fileno(original), &backing_stat) == 0
+                    && stat(publish, &publish_stat) == 0
+                    && (publish_stat.st_gid == backing_stat.st_gid
+                        || chown(publish, (uid_t)-1, backing_stat.st_gid) == 0)
                     && chmod(publish, backing_stat.st_mode & 0777) == 0;
             }
 #endif
