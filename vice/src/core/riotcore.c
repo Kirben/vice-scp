@@ -475,6 +475,13 @@ static int riotcore_snapshot_read(riot_context_t *riot_context, snapshot_t *p, i
         return -1;
     }
 
+    if (word_r_divider != divider[0] && word_r_divider != divider[1]
+        && word_r_divider != divider[2] && word_r_divider != divider[3]) {
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+        snapshot_module_close(m);
+        return -1;
+    }
+
     if (validate_only) {
         return snapshot_module_close(m);
     }
