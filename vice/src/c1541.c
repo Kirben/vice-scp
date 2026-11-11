@@ -2999,11 +2999,27 @@ static int extract_cmd_common(int nargs, char **args, int geos)
     switch (disk_type) {
         case DISK_IMAGE_TYPE_G64:   /* fall through */
         case DISK_IMAGE_TYPE_P64:
-        case DISK_IMAGE_TYPE_SCP:
             disk_size = D64_FILE_SIZE_35 + (7 * 17 * 256);    /* 42 tracks */
             break;
         case DISK_IMAGE_TYPE_G71:
             disk_size = (D64_FILE_SIZE_35 + (7 * 17 * 256)) * 2;    /* 84 tracks */
+            break;
+        case DISK_IMAGE_TYPE_SCP:
+            /* The flux file size does not bound its decoded DOS data. */
+            switch (floppy->image_format) {
+                case VDRIVE_IMAGE_FORMAT_1571:
+                    disk_size = D71_FILE_SIZE;
+                    break;
+                case VDRIVE_IMAGE_FORMAT_8050:
+                    disk_size = D80_FILE_SIZE;
+                    break;
+                case VDRIVE_IMAGE_FORMAT_8250:
+                    disk_size = D82_FILE_SIZE;
+                    break;
+                default:
+                    disk_size = D64_FILE_SIZE_35 + (7 * 17 * 256);    /* 42 tracks */
+                    break;
+            }
             break;
     }
 
