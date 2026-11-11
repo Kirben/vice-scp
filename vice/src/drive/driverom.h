@@ -66,6 +66,7 @@ int driverom_reload(int type);
 int driverom_load_images(void);
 int driverom_snapshot_write(struct snapshot_s *s, const struct drive_s *drive);
 int driverom_snapshot_read(struct snapshot_s *s, struct drive_s *drive);
+/* Return 1 for a valid embedded ROM, 0 when absent, and -1 on error. */
 int driverom_snapshot_validate(struct snapshot_s *s, unsigned int unit, unsigned int type);
 
 /* 1001 Images have the low and high part combined */

@@ -479,7 +479,7 @@ int driverom_snapshot_validate(snapshot_t *s, unsigned int unit, unsigned int ty
     if (snapshot_module_close(m) < 0) {
         return -1;
     }
-    return result;
+    return result < 0 ? -1 : 1;
 }
 
 int driverom_snapshot_read(snapshot_t *s, drive_t *drive)

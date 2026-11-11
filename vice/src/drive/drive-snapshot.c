@@ -620,6 +620,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     int native_read_only[NUM_DISK_UNITS] = {0};
     int has_drives[NUM_DISK_UNITS];
     int native_backend[NUM_DISK_UNITS] = {0};
+    int restore_rom[NUM_DISK_UNITS] = {0};
+    int protect_scp = snapshot_changes_scp(s);
     unsigned int restore_type[NUM_DISK_UNITS];
     unsigned int detach_mask[NUM_DISK_UNITS] = {0};
     drive_t restored_drive[NUM_DISK_UNITS][NUM_DRIVES];
@@ -925,7 +927,13 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                     return -1;
                 }
             }
-            if (driverom_snapshot_validate(s, unr, restore_type[unr]) < 0) {
+            restore_rom[unr] = driverom_snapshot_validate(s, unr, restore_type[unr]);
+            if (restore_rom[unr] < 0) {
+                return -1;
+            }
+            if (protect_scp && !restore_rom[unr]
+                && machine_drive_rom_check_loaded(restore_type[unr]) < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
         }
@@ -1064,7 +1072,16 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 case DRIVE_TYPE_8250:
                 case DRIVE_TYPE_9000:
                     unit->enable = 1;
-                    machine_drive_rom_setup_image(unr);
+                    if (protect_scp && restore_rom[unr]) {
+                        /* Use the validated embedded ROM before initialization can
+                           try to load an unavailable host ROM and disable the drive. */
+                        if (driverom_snapshot_read(s, unit->drives[0]) < 0) {
+                            return -1;
+                        }
+                        unit->rom_type = unit->type;
+                    } else {
+                        machine_drive_rom_setup_image(unr);
+                    }
                     drivemem_init(unit);
                     resources_set_int_sprintf("Drive%iIdleMethod", unit->idling_method, unr + 8);
                     driverom_initialize_traps(unit);
@@ -1164,7 +1181,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         if (has_tde[unr]) {
             unit =  diskunit_context[unr];
             drive = unit->drives[0];
-            if (/*save_roms &&*/ unit->enable) {
+            if (unit->enable && !(protect_scp && restore_rom[unr])) {
                 DBG(("drive ROM unit %i\n", unr + 8));
                 if (driverom_snapshot_read(s, drive) < 0) {
                     return -1;
