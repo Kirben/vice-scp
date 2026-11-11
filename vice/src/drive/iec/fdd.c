@@ -155,6 +155,13 @@ void fdd_shutdown(fd_drive_t *drv)
     lib_free(drv);
 }
 
+static int fdd_scp_disk_rate(const flux_capture_t *capture)
+{
+    unsigned int flags = flux_capture_flags(capture);
+
+    return (flags & FLUX_CAPTURE_MFM_ED) ? 3 : (flags & FLUX_CAPTURE_MFM_HD) ? 0 : 2;
+}
+
 void fdd_image_attach(fd_drive_t *drv, struct disk_image_s *image)
 {
     if (!drv) {
@@ -215,8 +222,7 @@ void fdd_image_attach(fd_drive_t *drv, struct disk_image_s *image)
             break;
     }
     if (image->type == DISK_IMAGE_TYPE_SCP) {
-        unsigned int flags = flux_capture_flags(disk_image_flux_capture_get(image));
-        drv->disk_rate = (flags & FLUX_CAPTURE_MFM_ED) ? 3 : (flags & FLUX_CAPTURE_MFM_HD) ? 0 : 2;
+        drv->disk_rate = fdd_scp_disk_rate(disk_image_flux_capture_get(image));
     }
     drv->raw.size = 25 * fdd_data_rates[drv->disk_rate];
     drv->raw.data = lib_malloc((size_t)(drv->raw.size));
@@ -919,7 +925,8 @@ int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s)
     return snapshot_module_close(m);
 }
 
-int fdd_snapshot_read_module(fd_drive_t *live, struct snapshot_s *s)
+static int fdd_snapshot_read(fd_drive_t *live, struct snapshot_s *s,
+                             const flux_capture_t *capture, int read_only)
 {
     fd_drive_t restored = *live;
     fd_drive_t *drv = &restored;
@@ -965,22 +972,22 @@ int fdd_snapshot_read_module(fd_drive_t *live, struct snapshot_s *s)
     }
 
     if (vminor) {
-        if (!drv->image || drv->image->type != DISK_IMAGE_TYPE_SCP
+        if (!capture
             || (unsigned int)drv->write_protect > 1
-            || (drv->image->read_only && !drv->write_protect)
+            || (read_only && !drv->write_protect)
             || (drv->write_protect && drv->raw.dirty)
-            || (drv->image->read_only ? vminor != 1 : vminor < 2)
+            || (read_only ? vminor != 1 : vminor < 2)
             || drv->raw.dirty > 1 || (drv->raw.dirty && (vminor < 2
                 || drv->raw.track_head >= FLUX_CAPTURE_MAX_TRACKS))
             || drv->head_invert != live->head_invert || (unsigned int)drv->head > 1
             || drv->disk_rate != expected_rate
             || drv->raw.head < 0 || drv->raw.head >= 25 * fdd_data_rates[expected_rate]
             || SMR_DW_UINT(m, &drv->flux_revolution) < 0
-            || drv->flux_revolution >= flux_capture_revolutions(disk_image_flux_capture_get(drv->image))) {
+            || drv->flux_revolution >= flux_capture_revolutions(capture)) {
             snapshot_module_close(m);
             return -1;
         }
-    } else if (drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+    } else if (capture) {
         snapshot_module_close(m);
         return -1;
     }
@@ -1042,4 +1049,29 @@ discard:
     lib_free(drv->raw.data);
     lib_free(drv->raw.sync);
     return -1;
+}
+
+int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
+{
+    const flux_capture_t *capture = disk_image_flux_capture_get(drv->image);
+
+    return fdd_snapshot_read(drv, s, capture, capture ? drv->image->read_only : 0);
+}
+
+int fdd_scp_snapshot_validate(struct snapshot_s *s, unsigned int number,
+                              const struct flux_capture_s *capture, int read_only)
+{
+    fd_drive_t candidate = {0};
+    char name[16];
+    int result;
+
+    /* Use the geometry of the incoming SCP and never touch the live FDD. */
+    snprintf(name, sizeof(name), "FDD%u", number);
+    candidate.myname = name;
+    candidate.head_invert = 1;
+    candidate.disk_rate = fdd_scp_disk_rate(capture);
+    result = fdd_snapshot_read(&candidate, s, capture, read_only);
+    lib_free(candidate.raw.data);
+    lib_free(candidate.raw.sync);
+    return result;
 }

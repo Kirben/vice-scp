@@ -51,6 +51,7 @@
 #include "gcr.h"
 #include "iecbus.h"
 #include "iecdrive.h"
+#include "iec/fdd.h"
 #include "iec/pc8477.h"
 #include "iec/wd1770.h"
 #include "lib.h"
@@ -755,7 +756,15 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
-            /* The replacement is valid. Detach through the old controller. */
+            /* Each unit has four FDD IDs. WD1770 uses the first and
+               PC8477 uses the second for the attached mechanism. */
+            if (mfm_captures[unr]
+                && fdd_scp_snapshot_validate(s, 4 * unr + (restored_type != DRIVE_TYPE_1581),
+                                             capture, restored_read_only) < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
+            }
+            /* Detach through the old controller after validating the replacement. */
             if (switch_controller && detach_snapshot_disk(unr + 8, 0) < 0) {
                 return -1;
             }

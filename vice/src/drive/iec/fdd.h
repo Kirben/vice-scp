@@ -30,6 +30,7 @@
 #include "types.h"
 
 struct disk_image_s;
+struct flux_capture_s;
 struct drive_s;
 struct snapshot_s;
 typedef struct fd_drive_s fd_drive_t;
@@ -62,5 +63,7 @@ uint16_t fdd_crc(uint16_t crc, uint8_t b);
 
 int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s);
 int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s);
+int fdd_scp_snapshot_validate(struct snapshot_s *s, unsigned int number,
+                              const struct flux_capture_s *capture, int read_only);
 
 #endif
