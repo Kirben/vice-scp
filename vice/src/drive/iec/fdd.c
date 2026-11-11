@@ -755,6 +755,15 @@ int fdd_write(fd_drive_t *drv, uint16_t data)
     return scp && drv->write_protect ? FDD_SCP_WRITE_ERROR : 0;
 }
 
+int fdd_finish_scp_write(fd_drive_t *drv)
+{
+    if (drv && drv->image && drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        fdd_flush_raw(drv);
+        return drv->write_protect ? FDD_SCP_WRITE_ERROR : 0;
+    }
+    return 0;
+}
+
 void fdd_flush(fd_drive_t *drv)
 {
     if (!drv) {

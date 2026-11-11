@@ -599,6 +599,9 @@ static void wd1770_execute(wd1770_t *drv)
                                 drv->data = 0;
                                 continue;
                         }
+                        if (fdd_finish_scp_write(drv->fdd) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         if (drv->cmd & WD_M) {
                             drv->sector++;
                             drv->step = 5;
@@ -748,6 +751,9 @@ static void wd1770_execute(wd1770_t *drv)
                             return;
                         }
                         if (fdd_index_count(drv->fdd) > 1) {
+                            if (fdd_finish_scp_write(drv->fdd) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->status &= ~WD_DRQ;
                             drv->type = 0;
                             break;

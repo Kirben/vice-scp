@@ -44,6 +44,7 @@ uint16_t fdd_read(fd_drive_t *drv);
 /* Preserve the legacy error return for non-SCP callers. */
 #define FDD_SCP_WRITE_ERROR (-2)
 int fdd_write(fd_drive_t *drv, uint16_t data);
+int fdd_finish_scp_write(fd_drive_t *drv);
 void fdd_flush(fd_drive_t *drv);
 void fdd_seek_pulse(fd_drive_t *drv, int dir);
 void fdd_select_head(fd_drive_t *drv, int head);
