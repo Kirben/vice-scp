@@ -574,14 +574,15 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
     if (recovery_path != NULL) {
         *recovery_path = NULL;
     }
-    if (fs->flux_only == FSIMAGE_FLUX_EMBEDDED) {
-        return 0;
-    }
     if (!fs->flux_dirty) {
         if (fs->flux_write_failed) {
             log_error(LOG_DEFAULT, "SCP drive write failed without recoverable changes: %s.", fs->name);
             fs->flux_write_failed = 0;
+            return -1;
         }
+        return 0;
+    }
+    if (fs->flux_only == FSIMAGE_FLUX_EMBEDDED) {
         return 0;
     }
 
