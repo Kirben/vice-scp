@@ -36,6 +36,7 @@
 #include "driveimage.h"
 #include "drivetypes.h"
 #include "gcr.h"
+#include "diskimage/fsimage.h"
 #include "log.h"
 #include "lib.h"
 #include "rotation-flux.h"
@@ -234,7 +235,9 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
 
     if (image->type == DISK_IMAGE_TYPE_SCP) {
         int head = drive->current_half_track;
-        unsigned int alignment = drive_flux_align_halftrack(dnr);
+        /* Embedded media gets its alignment from the snapshot cursor. */
+        unsigned int alignment = image->media.fsimage->flux_only == FSIMAGE_FLUX_EMBEDDED
+            ? 0 : drive_flux_align_halftrack(dnr);
         unsigned int side = drive_get_num_heads(drive->diskunit->type) == 2 ? drive->side : 0;
         const flux_capture_t *capture = disk_image_flux_capture_get(image);
         if (drive_check_scp_ieee(drive->diskunit->type)) {

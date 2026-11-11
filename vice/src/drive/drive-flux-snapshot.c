@@ -373,7 +373,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     state.inclusive = inclusive;
     writable = minor == 3 || minor == 5;
     if (drive_flux_snapshot_validate(drive, halftrack, read_only) < 0
-        || (!writable && !read_only)
+        || (!writable && !read_only) || (writable && alignment)
         || (minor >= 4) != has_1571_clock_switch(drive->diskunit->type)
         || rotation_flux_track(halftrack, side, alignment) != ht
         || motor != !!(drive->byte_ready_active & BRA_MOTOR_ON)) {
@@ -454,7 +454,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     }
     lib_free(drive->flux->write_pulses);
     *drive->flux = restored;
-    drive->read_only = read_only;
+    drive->read_only = read_only || drive->image->read_only;
     restored.write_pulses = NULL;
     rc = 0;
 done:

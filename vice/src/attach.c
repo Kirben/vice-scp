@@ -773,7 +773,9 @@ static int attach_native_image(disk_image_t *image, vdrive_t *vdrive,
         return -1;
     }
     if (!ieee && (flags & FLUX_CAPTURE_DOUBLE_SIDED)
-        && (drive_get_num_heads(dptr->diskunit->type) < 2 || drive_flux_align_halftrack(unit - 8))) {
+        && (drive_get_num_heads(dptr->diskunit->type) < 2
+            || (image->media.fsimage->flux_only != FSIMAGE_FLUX_EMBEDDED
+                && drive_flux_align_halftrack(unit - 8)))) {
         log_error(attach_log, "Double-sided GCR SCP requires a 1571 or 1571CR with flux alignment disabled.");
         return -1;
     }
