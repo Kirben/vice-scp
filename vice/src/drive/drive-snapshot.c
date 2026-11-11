@@ -552,19 +552,21 @@ static int validate_gcr_controller(snapshot_t *s, const diskunit_context_t *unit
         case DRIVE_TYPE_1570:
         case DRIVE_TYPE_1571:
         case DRIVE_TYPE_1571CR:
-            if (ciacore_snapshot_validate_module(unit->cia1571, s) < 0) {
+            if (!unit->cia1571 || ciacore_snapshot_validate_module(unit->cia1571, s) < 0) {
                 return -1;
             }
             /* fall through */
         case DRIVE_TYPE_1540:
         case DRIVE_TYPE_1541:
         case DRIVE_TYPE_1541II:
-            if (viacore_snapshot_validate_module(unit->via1d1541, s) < 0) {
+            if (!unit->via1d1541 || !unit->via2
+                || viacore_snapshot_validate_module(unit->via1d1541, s) < 0) {
                 return -1;
             }
             return viacore_snapshot_validate_module(unit->via2, s);
         case DRIVE_TYPE_2031:
-            if (viacore_snapshot_validate_module(unit->via1d2031, s) < 0) {
+            if (!unit->via1d2031 || !unit->via2
+                || viacore_snapshot_validate_module(unit->via1d2031, s) < 0) {
                 return -1;
             }
             return viacore_snapshot_validate_module(unit->via2, s);
@@ -795,6 +797,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             return -1;
         }
         if (minor_version == 1 && validate_gcr_controller(s, unit, restored_type) < 0) {
+            snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             return -1;
         }
         if (minor_version == 1) {
@@ -832,9 +835,11 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             }
             if (mfm_captures[unr]) {
                 int invalid_controller = restored_type == DRIVE_TYPE_1581
-                    ? (ciacore_snapshot_validate_module(unit->cia1581, s) < 0
+                    ? (!unit->cia1581 || !unit->wd1770
+                       || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
                        || wd1770_snapshot_validate_module(unit->wd1770, s) < 0)
-                    : (viacore_snapshot_validate_module(unit->via4000, s) < 0
+                    : (!unit->via4000 || !unit->pc8477
+                       || viacore_snapshot_validate_module(unit->via4000, s) < 0
                        || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0);
 
                 if (invalid_controller) {
@@ -909,7 +914,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
             if (has_tde[unr] && !native_backend[unr] && restore_type[unr] == DRIVE_TYPE_1581) {
                 unit = diskunit_context[unr];
-                if (ciacore_snapshot_validate_module(unit->cia1581, s) < 0
+                if (!unit->cia1581 || !unit->wd1770
+                    || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
                     || wd1770_snapshot_validate_module(unit->wd1770, s) < 0
                     || fdd_snapshot_validate(s, 4 * unr, NULL, 0) < 0) {
                     return -1;
