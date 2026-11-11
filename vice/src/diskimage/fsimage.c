@@ -131,6 +131,7 @@ void fsimage_media_destroy(disk_image_t *image)
         fsimage_close(image);
     }
     fsimage_scp_dispose(image);
+    lib_free(fsimage->flux_scp_backing_path);
     lib_free(fsimage->flux_scp_turns);
     flux_capture_destroy(fsimage->flux_scp_physical);
     lib_free(fsimage->flux_scp_wrsp);
@@ -194,6 +195,8 @@ int fsimage_open(disk_image_t *image)
     DBG(("fsimage_open image:%p", image));
 
     fsimage = image->media.fsimage;
+    lib_free(fsimage->flux_scp_backing_path);
+    fsimage->flux_scp_backing_path = NULL;
     lib_free(fsimage->flux_scp_turns);
     flux_capture_destroy(fsimage->flux_scp_physical);
     fsimage->flux_scp_turns = NULL;

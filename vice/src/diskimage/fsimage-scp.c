@@ -170,6 +170,9 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
     int measured = 0;
     int measure_period = clock == SCP_WRITE_MEASURE_CAPTURE_CLOCK || clock == SCP_WRITE_MEASURE_AUTO_CLOCK;
     int mfm = !!(flags & FLUX_CAPTURE_MFM);
+#ifndef WINDOWS_COMPILE
+    char backing_path[PATH_MAX];
+#endif
     uint64_t turns[FLUX_CAPTURE_MAX_TRACKS] = {0};
 
     /* Multi-turn images retain a standard SCP checksum and require an
@@ -213,7 +216,14 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
             return;
         }
     }
+#ifdef WINDOWS_COMPILE
     plain = fopen(fs->name, "r+b");
+#else
+    if (archdep_real_path(fs->name, backing_path) == NULL) {
+        return;
+    }
+    plain = fopen(backing_path, "r+b");
+#endif
     if (!plain) {
         return;
     }
@@ -296,6 +306,10 @@ void fsimage_scp_enable_write(disk_image_t *image, int multirev, scp_write_clock
     fs->fd = NULL;
     fs->flux_only = FSIMAGE_FLUX_FILE;
     fs->flux_scp_gzip = gzip;
+#ifndef WINDOWS_COMPILE
+    lib_free(fs->flux_scp_backing_path);
+    fs->flux_scp_backing_path = lib_strdup(backing_path);
+#endif
     memcpy(fs->flux_scp_range, header + 6, sizeof(fs->flux_scp_range));
     fs->flux_scp_flags = header[8] & 0x0f; /* Index, TPI, RPM and normalization. */
     fs->flux_scp_heads = header[10];
@@ -559,6 +573,7 @@ static int lock_scp_publish(const char *path)
 int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
 {
     fsimage_t *fs = image->media.fsimage;
+    const char *backing_path = fs->flux_scp_backing_path ? fs->flux_scp_backing_path : fs->name;
     uint8_t identity[20];
     uint8_t staged_identity[20];
     char *base;
@@ -586,7 +601,7 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
         return 0;
     }
 
-    base = lib_msprintf("%s.vice-write", fs->name);
+    base = lib_msprintf("%s.vice-write", backing_path);
     file = open_stage(base, &stage);
     lib_free(base);
     same_directory = file != NULL;
@@ -618,7 +633,7 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
     result = -1;
     if (same_directory && !fs->flux_write_failed && layout_ok && fs->flux_scp_gzip) {
         FILE *packed;
-        base = lib_msprintf("%s.vice-gzip", fs->name);
+        base = lib_msprintf("%s.vice-gzip", backing_path);
         packed = open_stage(base, &compressed);
         lib_free(base);
         if (packed) {
@@ -631,21 +646,21 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
         }
     }
     if (same_directory && !fs->flux_write_failed && layout_ok) {
-        publish_lock = lock_scp_publish(fs->name);
+        publish_lock = lock_scp_publish(backing_path);
     }
     if (publish_lock >= 0) {
         const char *publish = compressed ? compressed : stage;
-        original = fopen(fs->name, "r+b");
+        original = fopen(backing_path, "r+b");
         if (original != NULL) {
             int unchanged = !file_identity(original, identity)
                 && !memcmp(identity, fs->flux_file_identity, sizeof(identity));
             fclose(original);
             if (unchanged) {
 #ifdef WINDOWS_COMPILE
-                result = MoveFileExA(publish, fs->name,
+                result = MoveFileExA(publish, backing_path,
                                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : -1;
 #else
-                result = archdep_rename(publish, fs->name);
+                result = archdep_rename(publish, backing_path);
 #endif
             }
         }

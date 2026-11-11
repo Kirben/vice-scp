@@ -57,6 +57,7 @@ typedef struct fsimage_s {
     unsigned int flux_dirty;
     unsigned int flux_write_failed;
     uint8_t flux_file_identity[20];
+    char *flux_scp_backing_path;
     flux_capture_t *flux_scp_physical;
     uint64_t *flux_scp_turns;
     uint8_t flux_scp_flipped_dirty[FLUX_CAPTURE_TRACKS];
