@@ -35,6 +35,7 @@
 
 #include "archdep.h"
 #include "drive-snapshot.h"
+#include "iecdrive.h"
 #include "joyport.h"
 #include "joystick.h"
 #include "keyboard.h"
@@ -120,6 +121,20 @@ static int read_remaining_modules(snapshot_t *s, int event_mode)
     return 0;
 }
 
+static int read_drive_modules(snapshot_t *s, int event_mode)
+{
+    unsigned int available_busses = IEC_BUS_IEC;
+
+    /* The optional interface is restored after the drives. Its saved state
+       must be usable before an IEEE disk can replace a mounted SCP. */
+    if (viacore_snapshot_validate_module(machine_context.ieeevia1, s) == 0
+        && viacore_snapshot_validate_module(machine_context.ieeevia2, s) == 0) {
+        available_busses |= IEC_BUS_IEEE;
+    }
+    return drive_snapshot_read_with_machine_busses(s, read_remaining_modules, event_mode,
+                                                   available_busses);
+}
+
 int vic20_snapshot_read(const char *name, int event_mode)
 {
     snapshot_t *s;
@@ -144,7 +159,7 @@ int vic20_snapshot_read(const char *name, int event_mode)
         || vic_snapshot_read_module(s) < 0
         || viacore_snapshot_read_module(machine_context.via1, s) < 0
         || viacore_snapshot_read_module(machine_context.via2, s) < 0
-        || drive_snapshot_read_with_machine_modules(s, read_remaining_modules, event_mode) < 0) {
+        || read_drive_modules(s, event_mode) < 0) {
         goto fail;
     }
 

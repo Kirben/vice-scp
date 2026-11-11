@@ -39,4 +39,7 @@ int drive_snapshot_read_module(struct snapshot_s *s);
 int drive_snapshot_read_with_machine_modules(struct snapshot_s *s,
     int (*read_machine_modules)(struct snapshot_s *, int), int event_mode);
 
+int drive_snapshot_read_with_machine_busses(struct snapshot_s *s,
+    int (*read_machine_modules)(struct snapshot_s *, int), int event_mode, unsigned int available_busses);
+
 #endif

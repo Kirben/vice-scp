@@ -599,7 +599,8 @@ static int snapshot_changes_scp(snapshot_t *s);
 
 static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS],
                                flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES],
-                               int (*read_machine_modules)(snapshot_t *, int), int event_mode)
+                               int (*read_machine_modules)(snapshot_t *, int), int event_mode,
+                               unsigned int available_busses)
 {
     uint8_t major_version, minor_version;
     int unr, dnr;
@@ -611,7 +612,6 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     CLOCK detach_clk[NUM_DISK_UNITS];
     CLOCK attach_detach_clk[NUM_DISK_UNITS];
     int sync_factor;
-    unsigned int available_busses = iec_available_busses();
     int has_saved_sync_factor = 0;
     drive_t *drive;
     diskunit_context_t *unit;
@@ -629,11 +629,6 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     int restore_read_only[NUM_DISK_UNITS][NUM_DRIVES];
     uint8_t ieee_masks[NUM_DISK_UNITS] = {0};
     uint8_t ieee_embed[NUM_DISK_UNITS] = {0};
-
-    /* VIC-20 snapshots restore the optional IEEE interface after the drive modules. */
-    if (machine_class == VICE_MACHINE_VIC20) {
-        available_busses |= IEC_BUS_IEEE;
-    }
 
     drive_gcr_data_writeback_all();
 
@@ -1276,14 +1271,14 @@ static int snapshot_changes_scp(snapshot_t *s)
     return 0;
 }
 
-int drive_snapshot_read_with_machine_modules(snapshot_t *s,
-    int (*read_machine_modules)(snapshot_t *, int), int event_mode)
+int drive_snapshot_read_with_machine_busses(snapshot_t *s,
+    int (*read_machine_modules)(snapshot_t *, int), int event_mode, unsigned int available_busses)
 {
     flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
     flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES] = {{NULL}};
     int preserve_scp = read_machine_modules && snapshot_changes_scp(s);
     int result = read_drive_snapshot(s, mfm_captures, ieee_captures,
-                                     preserve_scp ? read_machine_modules : NULL, event_mode);
+                                     preserve_scp ? read_machine_modules : NULL, event_mode, available_busses);
     unsigned int unit, drive;
 
     for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
@@ -1296,6 +1291,13 @@ int drive_snapshot_read_with_machine_modules(snapshot_t *s,
         result = read_machine_modules(s, event_mode);
     }
     return result;
+}
+
+int drive_snapshot_read_with_machine_modules(snapshot_t *s,
+    int (*read_machine_modules)(snapshot_t *, int), int event_mode)
+{
+    return drive_snapshot_read_with_machine_busses(s, read_machine_modules, event_mode,
+                                                   iec_available_busses());
 }
 
 int drive_snapshot_read_module(snapshot_t *s)
