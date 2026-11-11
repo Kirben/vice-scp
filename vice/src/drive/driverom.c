@@ -343,16 +343,17 @@ int driverom_reload(int type)
 /* -------------------------------------------------------------------- */
 
 /*
-    DRIVEROM 1.0 snapshot module format:
+    DRIVEROM snapshot module formats:
 
-   Type       | Name                        | Description
+   Version | Payload
    ------------------------------------------------------
-   ARRAY      | drive ROM                   | size depends on drive
+   1.0     | model-specific ROM bytes
+   1.1     | complete DRIVE_ROM_SIZE buffer
 
 */
 
 #define ROM_SNAP_MAJOR 1
-#define ROM_SNAP_MINOR 0
+#define ROM_SNAP_MINOR 1
 
 static unsigned int driverom_snapshot_size(unsigned int type, unsigned int *offset)
 {
@@ -409,24 +410,39 @@ static unsigned int driverom_snapshot_size(unsigned int type, unsigned int *offs
     }
 }
 
+/* Version 1.0 stored only the model's ROM payload. Version 1.1 stores
+   the complete mapped buffer, including mirrors and expanded ROMs. */
+static unsigned int driverom_snapshot_layout(unsigned int type, uint8_t minor,
+                                             unsigned int *offset)
+{
+    unsigned int len = driverom_snapshot_size(type, offset);
+
+    if (len && minor >= 1) {
+        *offset = 0;
+        len = DRIVE_ROM_SIZE;
+    }
+    return len;
+}
+
 /* TODO: pass diskunit_context_t as parameter instead */
-int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
+int driverom_snapshot_write(snapshot_t *s, const drive_t *drive, int full_layout)
 {
     char snap_module_name[10];
     snapshot_module_t *m;
     diskunit_context_t *unit = drive->diskunit;
     unsigned int offset;
     unsigned int len;
+    uint8_t minor = full_layout ? ROM_SNAP_MINOR : 0;
 
     sprintf(snap_module_name, "DRIVEROM%u", drive->diskunit->mynumber);
 
-    m = snapshot_module_create(s, snap_module_name, ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
+    m = snapshot_module_create(s, snap_module_name, ROM_SNAP_MAJOR, minor);
 
     if (m == NULL) {
         return -1;
     }
 
-    len = driverom_snapshot_size(unit->type, &offset);
+    len = driverom_snapshot_layout(unit->type, minor, &offset);
     if (!len) {
         snapshot_module_close(m);
         return -1;
@@ -442,17 +458,18 @@ int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
     return snapshot_module_close(m);
 }
 
-static int driverom_snapshot_open(snapshot_t *s, unsigned int unit, snapshot_module_t **module)
+static int driverom_snapshot_open(snapshot_t *s, unsigned int unit, snapshot_module_t **module,
+                                   uint8_t *minor_version)
 {
-    uint8_t major_version, minor_version;
+    uint8_t major_version;
     char name[16];
 
     snprintf(name, sizeof(name), "DRIVEROM%u", unit);
-    *module = snapshot_module_open(s, name, &major_version, &minor_version);
-    if (*module && snapshot_version_is_bigger(major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR)) {
+    *module = snapshot_module_open(s, name, &major_version, minor_version);
+    if (*module && snapshot_version_is_bigger(major_version, *minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR)) {
         log_error(driverom_log,
                   "Snapshot module version (%d.%d) newer than %d.%d.",
-                  major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
+                  major_version, *minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
         snapshot_module_close(*module);
         *module = NULL;
         snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
@@ -464,17 +481,18 @@ static int driverom_snapshot_open(snapshot_t *s, unsigned int unit, snapshot_mod
 int driverom_snapshot_validate(snapshot_t *s, unsigned int unit, unsigned int type)
 {
     snapshot_module_t *m;
+    uint8_t minor;
     unsigned int offset, len;
     int result;
 
-    if (driverom_snapshot_open(s, unit, &m) < 0) {
+    if (driverom_snapshot_open(s, unit, &m, &minor) < 0) {
         return -1;
     }
     if (!m) {
         return 0;
     }
 
-    len = driverom_snapshot_size(type, &offset);
+    len = driverom_snapshot_layout(type, minor, &offset);
     result = len ? snapshot_module_skip_bytes(m, len) : -1;
     if (snapshot_module_close(m) < 0) {
         return -1;
@@ -482,21 +500,53 @@ int driverom_snapshot_validate(snapshot_t *s, unsigned int unit, unsigned int ty
     return result < 0 ? -1 : 1;
 }
 
+static void driverom_restore_legacy_layout(diskunit_context_t *unit, unsigned int offset,
+                                            unsigned int len)
+{
+    const char *resource_name = NULL;
+    const char *rom_name;
+    uint8_t configured_rom[DRIVE_ROM_SIZE];
+
+    switch (unit->type) {
+        case DRIVE_TYPE_1540:
+            resource_name = "DosName1540";
+            break;
+        case DRIVE_TYPE_1541:
+            resource_name = "DosName1541";
+            break;
+        case DRIVE_TYPE_1541II:
+            resource_name = "DosName1541ii";
+            break;
+    }
+
+    /* Old snapshots omitted the lower half of expanded 154x ROMs.
+       Recover it from the configured image, as normal ROM setup did. */
+    if (resource_name && resources_get_string(resource_name, &rom_name) == 0
+        && sysfile_load(rom_name, "DRIVES", configured_rom, len, DRIVE_ROM_SIZE) == DRIVE_ROM_SIZE) {
+        memcpy(unit->rom, configured_rom, len);
+    } else if (offset) {
+        memcpy(unit->rom, unit->rom + offset, len);
+    } else if (unit->type == DRIVE_TYPE_1551) {
+        memcpy(unit->rom + len, unit->rom, len);
+    }
+}
+
 int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
 {
     snapshot_module_t *m;
+    uint8_t minor;
     diskunit_context_t *unit = drive->diskunit;
     unsigned int offset;
     unsigned int len;
 
-    if (driverom_snapshot_open(s, unit->mynumber, &m) < 0) {
+    if (driverom_snapshot_open(s, unit->mynumber, &m, &minor) < 0) {
         return -1;
     }
     if (!m) {
         return 0;
     }
 
-    len = driverom_snapshot_size(unit->type, &offset);
+    len = driverom_snapshot_layout(unit->type, minor, &offset);
     if (!len) {
         snapshot_module_close(m);
         return -1;
@@ -507,6 +557,10 @@ int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
             snapshot_module_close(m);
         }
         return -1;
+    }
+
+    if (minor == 0) {
+        driverom_restore_legacy_layout(unit, offset, len);
     }
 
     machine_drive_rom_do_checksum(drive->diskunit->mynumber);

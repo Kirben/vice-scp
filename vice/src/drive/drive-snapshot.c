@@ -304,6 +304,7 @@ int drive_snapshot_write_module(snapshot_t *s, int save_disks, int save_roms)
     int has_drives[NUM_DISK_UNITS];
     int sync_factor;
     int backend;
+    int full_rom_layout = 0;
     unsigned int ieee_masks[NUM_DISK_UNITS];
     diskunit_context_t *unit;
     drive_t *drive;
@@ -312,6 +313,9 @@ int drive_snapshot_write_module(snapshot_t *s, int save_disks, int save_roms)
     for (unr = 0; unr < NUM_DISK_UNITS; unr++) {
         unit = diskunit_context[unr];
         ieee_masks[unr] = ieee_scp_mask(unit);
+        if (ieee_masks[unr] || flux_backend(unit->drives[0])) {
+            full_rom_layout = 1;
+        }
         if (save_disks && ieee_masks[unr]) {
             for (dnr = 0; dnr < NUM_DRIVES; dnr++) {
                 if (!(ieee_masks[unr] & (1U << dnr)) && file_system_get_image(unr + 8, dnr)) {
@@ -506,7 +510,7 @@ int drive_snapshot_write_module(snapshot_t *s, int save_disks, int save_roms)
 
             if (save_roms && unit->enable) {
                 DBG(("drive ROM unit %i\n", unr + 8));
-                if (driverom_snapshot_write(s, drive) < 0) {
+                if (driverom_snapshot_write(s, drive, full_rom_layout) < 0) {
                     return -1;
                 }
             }
