@@ -801,7 +801,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
     }
 
-    /* Check required CPU modules before any old controller can lose its disk. */
+    /* Check required CPU and optional ROM modules before detaching media. */
     for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
         if (has_tde[unr] && restore_type[unr] != DRIVE_TYPE_NONE) {
             const char *name = diskunit_context[unr]->cpu->snap_module_name;
@@ -822,6 +822,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             }
             if (!compatible) {
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
+            }
+            if (driverom_snapshot_validate_version(s, unr) < 0) {
                 return -1;
             }
         }

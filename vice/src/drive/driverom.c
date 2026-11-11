@@ -456,31 +456,47 @@ int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
     return snapshot_module_close(m);
 }
 
-int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
+static int driverom_snapshot_open(snapshot_t *s, unsigned int unit, snapshot_module_t **module)
 {
     uint8_t major_version, minor_version;
+    char name[16];
+
+    snprintf(name, sizeof(name), "DRIVEROM%u", unit);
+    *module = snapshot_module_open(s, name, &major_version, &minor_version);
+    if (*module && snapshot_version_is_bigger(major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR)) {
+        log_error(driverom_log,
+                  "Snapshot module version (%d.%d) newer than %d.%d.",
+                  major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
+        snapshot_module_close(*module);
+        *module = NULL;
+        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
+        return -1;
+    }
+    return 0;
+}
+
+int driverom_snapshot_validate_version(snapshot_t *s, unsigned int unit)
+{
+    snapshot_module_t *m;
+
+    if (driverom_snapshot_open(s, unit, &m) < 0) {
+        return -1;
+    }
+    return m ? snapshot_module_close(m) : 0;
+}
+
+int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
+{
     snapshot_module_t *m;
     diskunit_context_t *unit = drive->diskunit;
-    char snap_module_name[10];
     uint8_t *base;
     int len;
 
-    sprintf(snap_module_name, "DRIVEROM%u", drive->diskunit->mynumber);
-
-    m = snapshot_module_open(s, snap_module_name, &major_version, &minor_version);
-    if (m == NULL) {
-        return 0;
-    }
-
-    /* Do not accept versions higher than current */
-    if (snapshot_version_is_bigger(major_version, minor_version, ROM_SNAP_MAJOR, ROM_SNAP_MINOR)) {
-        snapshot_set_error(SNAPSHOT_MODULE_HIGHER_VERSION);
-        log_error(driverom_log,
-                  "Snapshot module version (%d.%d) newer than %d.%d.",
-                  major_version, minor_version,
-                  ROM_SNAP_MAJOR, ROM_SNAP_MINOR);
-        snapshot_module_close(m);
+    if (driverom_snapshot_open(s, unit->mynumber, &m) < 0) {
         return -1;
+    }
+    if (!m) {
+        return 0;
     }
 
     switch (unit->type) {
