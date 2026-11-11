@@ -236,22 +236,19 @@ static int snapshot_embeds_flux(snapshot_t *s, unsigned int unit, unsigned int b
     return snapshot_module_close(m) == 0 && matches;
 }
 
-static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
-                                 unsigned int address, unsigned int mask, int embed, int mfm,
-                                 int mfm_read_only)
+static int restore_ieee_flux(snapshot_t *s, diskunit_context_t *unit,
+                               unsigned int address, unsigned int mask, int embed)
 {
     flux_capture_t *captures[NUM_DRIVES] = {NULL};
-    int read_only[NUM_DRIVES];
     unsigned int number;
-    unsigned int count = !mfm && drive_check_dual(unit->type) ? NUM_DRIVES : 1;
+    unsigned int count = drive_check_dual(unit->type) ? NUM_DRIVES : 1;
     int rc = -1;
 
     /* Validate both captures before replacing either attachment. */
     for (number = 0; number < count; number++) {
-        read_only[number] = mfm ? mfm_read_only : unit->drives[number]->read_only;
         if (mask & (1U << number)) {
             if (drive_sector_flux_snapshot_read(s, unit->drives[number], address,
-                                                  number, mfm, embed, read_only[number], &captures[number]) < 0) {
+                                                  number, 0, embed, unit->drives[number]->read_only, &captures[number]) < 0) {
                 goto done;
             }
         } else if (native_flux_module_present(s, address, number) != 0) {
@@ -262,12 +259,10 @@ static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
     for (number = 0; number < count; number++) {
         if (captures[number]) {
             if (file_system_attach_flux_capture(address, number, captures[number],
-                                                read_only[number], flux_capture_uses_360_clock(captures[number])) < 0) {
+                                                unit->drives[number]->read_only, flux_capture_uses_360_clock(captures[number])) < 0) {
                 goto done;
             }
             captures[number] = NULL;
-        } else if (mfm && (mask & (1U << number))) {
-            unit->drives[number]->read_only = read_only[number];
         } else if (!(mask & (1U << number))
                    && (embed || disk_image_flux_capture_get(unit->drives[number]->image))
                    && detach_snapshot_disk(address, number) < 0) {
@@ -543,7 +538,7 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
     return s;
 }
 
-int drive_snapshot_read_module(snapshot_t *s)
+static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS])
 {
     uint8_t major_version, minor_version;
     int unr, dnr;
@@ -743,17 +738,26 @@ int drive_snapshot_read_module(snapshot_t *s)
         snapshot_module_close(m);
         m = NULL;
         if (minor_version == 2) {
+            const flux_capture_t *capture;
+            int switch_controller;
+
             drive = unit->drives[0];
-            /* Flush and detach through the controller that owns the disk. */
-            if (flux_backend(drive) == 2
-                && (unit->type == DRIVE_TYPE_1581) != (restored_type == DRIVE_TYPE_1581)) {
-                if (!snapshot_embeds_flux(s, unr + 8, 2)) {
-                    snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
-                    return -1;
-                }
-                if (detach_snapshot_disk(unr + 8, 0) < 0) {
-                    return -1;
-                }
+            switch_controller = flux_backend(drive) == 2
+                && (unit->type == DRIVE_TYPE_1581) != (restored_type == DRIVE_TYPE_1581);
+            if (drive_sector_flux_snapshot_read(s, drive, unr + 8, 0, 1,
+                                                switch_controller ? 1 : -1,
+                                                restored_read_only, &mfm_captures[unr]) < 0) {
+                return -1;
+            }
+            capture = mfm_captures[unr] ? mfm_captures[unr]
+                : disk_image_flux_capture_get(drive->image);
+            if (!drive_check_scp_mfm(restored_type, flux_capture_flags(capture))) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
+            }
+            /* The replacement is valid. Detach through the old controller. */
+            if (switch_controller && detach_snapshot_disk(unr + 8, 0) < 0) {
+                return -1;
             }
             unit->type = restored_type;
             native_read_only[unr] = restored_read_only;
@@ -838,12 +842,21 @@ int drive_snapshot_read_module(snapshot_t *s)
                     }
                 }
                 /* Mount media before restoring controller position and disk-change state. */
-                if (native_backend[unr] == 2
-                    && restore_sector_flux(s, unit, unr + 8, 1, -1, 1, native_read_only[unr]) < 0) {
-                    return -1;
+                if (native_backend[unr] == 2) {
+                    flux_capture_t *capture = mfm_captures[unr];
+
+                    if (capture) {
+                        if (file_system_attach_flux_capture(unr + 8, 0, capture, native_read_only[unr],
+                                                            flux_capture_uses_360_clock(capture)) < 0) {
+                            return -1;
+                        }
+                        mfm_captures[unr] = NULL;
+                    } else {
+                        unit->drives[0]->read_only = native_read_only[unr];
+                    }
                 }
                 if (native_backend[unr] == 3
-                    && restore_sector_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr], 0, 0) < 0) {
+                    && restore_ieee_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr]) < 0) {
                     return -1;
                 }
                 if (machine_drive_snapshot_read(diskunit_context[unr], s) < 0) {
@@ -977,6 +990,19 @@ int drive_snapshot_read_module(snapshot_t *s)
  *                      disk image
  *
  */
+
+int drive_snapshot_read_module(snapshot_t *s)
+{
+    flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
+    int result = read_drive_snapshot(s, mfm_captures);
+    unsigned int unit;
+
+    for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
+        flux_capture_destroy(mfm_captures[unit]);
+    }
+    return result;
+}
+
 
 static int drive_snapshot_write_image_module(snapshot_t *s, unsigned int dnr)
 {
