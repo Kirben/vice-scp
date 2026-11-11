@@ -802,7 +802,11 @@ static int disk_image_check_for_d90(disk_image_t *image)
 */
 int fsimage_probe(disk_image_t *image)
 {
-    const char *extension = util_get_extension(image->media.fsimage->name);
+    const char *name = image->media.fsimage->name;
+    const char *extension = util_get_extension(name);
+    size_t name_length = strlen(name);
+    int scp_name = (extension && util_strcasecmp(extension, "scp") == 0)
+        || (name_length >= 7 && util_strcasecmp(name + name_length - 7, ".scp.gz") == 0);
     int scp_result;
 
     image->type = DISK_IMAGE_TYPE_UNKNOWN;
@@ -810,8 +814,7 @@ int fsimage_probe(disk_image_t *image)
     /* Signature-based flux recognition must precede all size-based probes.
        Explicit comparisons: negative errors are not successful recognition. */
     scp_result = fsimage_scp_read(image);
-    if (scp_result != SCP_FILE_NOT_MATCHED && extension != NULL
-        && util_strcasecmp(extension, "scp") == 0) {
+    if (scp_result != SCP_FILE_NOT_MATCHED && scp_name) {
         image->type = DISK_IMAGE_TYPE_SCP;
     }
     if (image->type == DISK_IMAGE_TYPE_SCP) {
