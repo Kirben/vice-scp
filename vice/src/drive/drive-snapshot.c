@@ -1098,11 +1098,29 @@ static int has_mounted_scp(void)
     return 0;
 }
 
+static int snapshot_changes_scp(snapshot_t *s)
+{
+    unsigned int unit, drive;
+
+    if (has_mounted_scp()) {
+        return 1;
+    }
+
+    for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
+        for (drive = 0; drive < NUM_DRIVES; ++drive) {
+            if (native_flux_module_present(s, unit + 8, drive)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int drive_snapshot_read_with_machine_modules(snapshot_t *s,
     int (*read_machine_modules)(snapshot_t *, int), int event_mode)
 {
     flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
-    int preserve_scp = read_machine_modules && has_mounted_scp();
+    int preserve_scp = read_machine_modules && snapshot_changes_scp(s);
     int result = read_drive_snapshot(s, mfm_captures,
                                      preserve_scp ? read_machine_modules : NULL, event_mode);
     unsigned int unit;
