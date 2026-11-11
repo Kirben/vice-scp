@@ -736,6 +736,18 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         snapshot_module_close(m);
         m = NULL;
+        if (minor_version == 1) {
+            unsigned int current_type = unit->type;
+            int result;
+
+            unit->type = restored_type;
+            result = drive_flux_snapshot_read(s, unit->drives[0], unr + 8, 0, half_track[unr],
+                                              native_side[unr], native_read_only[unr], 1);
+            unit->type = current_type;
+            if (result < 0) {
+                return -1;
+            }
+        }
         if (minor_version == 2) {
             const flux_capture_t *capture;
             int switch_controller;
@@ -917,7 +929,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 if (native_backend[unr] == 1) {
                     unit = diskunit_context[unr];
                     if (drive_flux_snapshot_read(s, unit->drives[dnr], unr + 8, dnr, half_track[unr],
-                                                 native_side[unr], native_read_only[unr]) < 0) {
+                                                 native_side[unr], native_read_only[unr], 0) < 0) {
                         return -1;
                     }
                 } else if (drive_snapshot_read_image_module(s, unr) < 0

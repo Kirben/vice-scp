@@ -318,7 +318,7 @@ int drive_flux_snapshot_write(snapshot_t *s, drive_t *drive,
 }
 
 int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
-                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side, int read_only)
+                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side, int read_only, int validate_only)
 {
     char name[16];
     uint8_t major;
@@ -446,6 +446,10 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
         goto done;
     }
     m = NULL;
+    if (validate_only) {
+        rc = 0;
+        goto done;
+    }
     if (embed) {
         if (file_system_attach_flux_capture(unit, number, owned, !writable, speed == 6) < 0) {
             goto done;

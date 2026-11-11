@@ -7,7 +7,7 @@ int drive_flux_snapshot_validate(const struct drive_s *drive, unsigned int halft
 int drive_flux_snapshot_write(struct snapshot_s *s, struct drive_s *drive,
                                 unsigned int unit, unsigned int number, int embed);
 int drive_flux_snapshot_read(struct snapshot_s *s, struct drive_s *drive,
-                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side, int read_only);
+                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side, int read_only, int validate_only);
 struct flux_capture_s;
 int drive_sector_flux_snapshot_write(struct snapshot_s *s, const struct drive_s *drive,
                                       unsigned int unit, unsigned int number, int embed, int mfm);
