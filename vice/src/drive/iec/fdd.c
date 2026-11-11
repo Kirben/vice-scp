@@ -966,7 +966,9 @@ int fdd_snapshot_read_module(fd_drive_t *live, struct snapshot_s *s)
 
     if (vminor) {
         if (!drv->image || drv->image->type != DISK_IMAGE_TYPE_SCP
-            || drv->write_protect != drv->image->read_only
+            || (unsigned int)drv->write_protect > 1
+            || (drv->image->read_only && !drv->write_protect)
+            || (drv->write_protect && drv->raw.dirty)
             || (drv->image->read_only ? vminor != 1 : vminor < 2)
             || drv->raw.dirty > 1 || (drv->raw.dirty && (vminor < 2
                 || drv->raw.track_head >= FLUX_CAPTURE_MAX_TRACKS))
