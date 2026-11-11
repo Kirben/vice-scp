@@ -285,7 +285,7 @@ flux_view_t *flux_view_create(const flux_capture_t *capture)
     if (!flux_capture_is_sealed(capture)) {
         return NULL;
     }
-    tracks = (flux_capture_flags(capture) & FLUX_CAPTURE_8X50) ? 154 : VIEW_TRACKS;
+    tracks = (flux_capture_flags(capture) & FLUX_CAPTURE_8X50) ? 154 : 70;
     view = calloc(1, sizeof(*view) + tracks * sizeof(*view->tracks));
     if (view) {
         view->capture = capture;
@@ -303,6 +303,8 @@ static view_track_t *view_track(flux_view_t *view, unsigned int track, unsigned 
     unsigned int flags;
     unsigned int tracks;
     unsigned int slot;
+    unsigned int cylinder;
+    int double_sided;
     int wide;
     view_track_t *cache;
     if (!view) {
@@ -310,12 +312,17 @@ static view_track_t *view_track(flux_view_t *view, unsigned int track, unsigned 
     }
     flags = flux_capture_flags(view->capture);
     wide = (flags & FLUX_CAPTURE_8X50) != 0;
-    tracks = wide ? ((flags & FLUX_CAPTURE_DOUBLE_SIDED) ? 154 : 77) : VIEW_TRACKS;
+    double_sided = (flags & (FLUX_CAPTURE_DOUBLE_SIDED | FLUX_CAPTURE_MFM)) == FLUX_CAPTURE_DOUBLE_SIDED;
+    tracks = wide ? ((flags & FLUX_CAPTURE_DOUBLE_SIDED) ? 154 : 77) : (double_sided ? 70 : VIEW_TRACKS);
     if (!track || track > tracks) {
         return NULL;
     }
     slot = wide ? ((track - 1) % 77) * 2 + (track > 77) : (track - 1) * 2;
-    sectors = disk_image_sector_per_track(wide ? DISK_IMAGE_TYPE_D82 : DISK_IMAGE_TYPE_D64, track);
+    cylinder = !wide && double_sided ? (track - 1) % 35 + 1 : track;
+    if (!wide && double_sided) {
+        slot = (cylinder - 1) * 2 + (track > 35 ? FLUX_CAPTURE_TRACKS : 0);
+    }
+    sectors = disk_image_sector_per_track(wide ? DISK_IMAGE_TYPE_D82 : DISK_IMAGE_TYPE_D64, cylinder);
     /* DOS 1 adds sector 19 on tracks 18 through 24. Scan for it on request. */
     if (!wide && sector == 19 && track >= 18 && track < 25) {
         sectors = 20;
@@ -326,7 +333,7 @@ static view_track_t *view_track(flux_view_t *view, unsigned int track, unsigned 
     cache = &view->tracks[track - 1];
     if (cache->decoded < sectors) {
         cache->valid = 0;
-        decode_track(view->capture, cache, slot, track, track, sectors, wide);
+        decode_track(view->capture, cache, slot, cylinder, track, sectors, wide);
     }
     return cache;
 }

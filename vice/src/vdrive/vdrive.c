@@ -472,6 +472,14 @@ int vdrive_attach_image(disk_image_t *image, unsigned int unit,
                 vdrive->current_offset = 0;
                 break;
             }
+            if ((flux_capture_flags(disk_image_flux_capture_get(image))
+                 & (FLUX_CAPTURE_DOUBLE_SIDED | FLUX_CAPTURE_MFM)) == FLUX_CAPTURE_DOUBLE_SIDED) {
+                vdrive->image_format = VDRIVE_IMAGE_FORMAT_1571;
+                vdrive->num_tracks = NUM_TRACKS_1571;
+                vdrive->bam_size = 0x200;
+                vdrive->current_offset = 0;
+                break;
+            }
             /* fall through */
         case DISK_IMAGE_TYPE_G64:
             vdrive->image_format = VDRIVE_IMAGE_FORMAT_1541;
