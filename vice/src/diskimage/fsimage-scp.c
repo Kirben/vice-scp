@@ -20,6 +20,9 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <string.h>
+#ifndef WINDOWS_COMPILE
+#include <sys/stat.h>
+#endif
 #include <unistd.h>
 #include <zlib.h>
 #ifdef WINDOWS_COMPILE
@@ -654,6 +657,14 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
         if (original != NULL) {
             int unchanged = !file_identity(original, identity)
                 && !memcmp(identity, fs->flux_file_identity, sizeof(identity));
+#ifndef WINDOWS_COMPILE
+            struct stat backing_stat;
+
+            if (unchanged) {
+                unchanged = fstat(fileno(original), &backing_stat) == 0
+                    && chmod(publish, backing_stat.st_mode & 0777) == 0;
+            }
+#endif
             fclose(original);
             if (unchanged) {
 #ifdef WINDOWS_COMPILE
