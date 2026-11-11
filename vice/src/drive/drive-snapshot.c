@@ -836,7 +836,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                     return -1;
                 }
             }
-            if (driverom_snapshot_validate_version(s, unr) < 0) {
+            if (driverom_snapshot_validate(s, unr, restore_type[unr]) < 0) {
                 return -1;
             }
         }

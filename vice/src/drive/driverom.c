@@ -354,14 +354,69 @@ int driverom_reload(int type)
 #define ROM_SNAP_MAJOR 1
 #define ROM_SNAP_MINOR 0
 
+static unsigned int driverom_snapshot_size(unsigned int type, unsigned int *offset)
+{
+    *offset = 0;
+    switch (type) {
+        case DRIVE_TYPE_1540:
+            *offset = 0x4000;
+            return DRIVE_ROM1540_SIZE;
+        case DRIVE_TYPE_1541:
+            *offset = 0x4000;
+            return DRIVE_ROM1541_SIZE;
+        case DRIVE_TYPE_1541II:
+            *offset = 0x4000;
+            return DRIVE_ROM1541II_SIZE;
+        case DRIVE_TYPE_1551:
+            return DRIVE_ROM1551_SIZE;
+        case DRIVE_TYPE_1570:
+            return DRIVE_ROM1570_SIZE;
+        case DRIVE_TYPE_1571:
+            return DRIVE_ROM1571_SIZE;
+        case DRIVE_TYPE_1571CR:
+            return DRIVE_ROM1571CR_SIZE;
+        case DRIVE_TYPE_1581:
+            return DRIVE_ROM1581_SIZE;
+        case DRIVE_TYPE_2000:
+            return DRIVE_ROM2000_SIZE;
+        case DRIVE_TYPE_4000:
+            return DRIVE_ROM4000_SIZE;
+        case DRIVE_TYPE_CMDHD:
+            *offset = 0x4000;
+            return DRIVE_ROMCMDHD_SIZE;
+        case DRIVE_TYPE_2031:
+            *offset = 0x4000;
+            return DRIVE_ROM2031_SIZE;
+        case DRIVE_TYPE_2040:
+            *offset = DRIVE_ROM_SIZE - DRIVE_ROM2040_SIZE;
+            return DRIVE_ROM2040_SIZE;
+        case DRIVE_TYPE_3040:
+            *offset = DRIVE_ROM_SIZE - DRIVE_ROM3040_SIZE;
+            return DRIVE_ROM3040_SIZE;
+        case DRIVE_TYPE_4040:
+            *offset = DRIVE_ROM_SIZE - DRIVE_ROM4040_SIZE;
+            return DRIVE_ROM4040_SIZE;
+        case DRIVE_TYPE_1001:
+        case DRIVE_TYPE_8050:
+        case DRIVE_TYPE_8250:
+            *offset = 0x4000;
+            return DRIVE_ROM1001_SIZE;
+        case DRIVE_TYPE_9000:
+            *offset = 0x4000;
+            return DRIVE_ROM9000_SIZE;
+        default:
+            return 0;
+    }
+}
+
 /* TODO: pass diskunit_context_t as parameter instead */
 int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
 {
     char snap_module_name[10];
     snapshot_module_t *m;
     diskunit_context_t *unit = drive->diskunit;
-    const uint8_t *base;
-    int len;
+    unsigned int offset;
+    unsigned int len;
 
     sprintf(snap_module_name, "DRIVEROM%u", drive->diskunit->mynumber);
 
@@ -371,82 +426,13 @@ int driverom_snapshot_write(snapshot_t *s, const drive_t *drive)
         return -1;
     }
 
-    switch (unit->type) {
-        case DRIVE_TYPE_1540:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1540_SIZE;
-            break;
-        case DRIVE_TYPE_1541:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1541_SIZE;
-            break;
-        case DRIVE_TYPE_1541II:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1541II_SIZE;
-            break;
-        case DRIVE_TYPE_1551:
-            base = unit->rom;
-            len = DRIVE_ROM1551_SIZE;
-            break;
-        case DRIVE_TYPE_1570:
-            base = unit->rom;
-            len = DRIVE_ROM1570_SIZE;
-            break;
-        case DRIVE_TYPE_1571:
-            base = unit->rom;
-            len = DRIVE_ROM1571_SIZE;
-            break;
-        case DRIVE_TYPE_1571CR:
-            base = unit->rom;
-            len = DRIVE_ROM1571CR_SIZE;
-            break;
-        case DRIVE_TYPE_1581:
-            base = unit->rom;
-            len = DRIVE_ROM1581_SIZE;
-            break;
-        case DRIVE_TYPE_2000:
-            base = unit->rom;
-            len = DRIVE_ROM2000_SIZE;
-            break;
-        case DRIVE_TYPE_4000:
-            base = unit->rom;
-            len = DRIVE_ROM4000_SIZE;
-            break;
-        case DRIVE_TYPE_CMDHD:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROMCMDHD_SIZE;
-            break;
-        case DRIVE_TYPE_2031:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM2031_SIZE;
-            break;
-        case DRIVE_TYPE_2040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM2040_SIZE]);
-            len = DRIVE_ROM2040_SIZE;
-            break;
-        case DRIVE_TYPE_3040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM3040_SIZE]);
-            len = DRIVE_ROM3040_SIZE;
-            break;
-        case DRIVE_TYPE_4040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM4040_SIZE]);
-            len = DRIVE_ROM4040_SIZE;
-            break;
-        case DRIVE_TYPE_1001:
-        case DRIVE_TYPE_8050:
-        case DRIVE_TYPE_8250:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1001_SIZE;
-            break;
-        case DRIVE_TYPE_9000:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM9000_SIZE;
-            break;
-        default:
-            return -1;
+    len = driverom_snapshot_size(unit->type, &offset);
+    if (!len) {
+        snapshot_module_close(m);
+        return -1;
     }
 
-    if (SMW_BA(m, base, len) < 0) {
+    if (SMW_BA(m, unit->rom + offset, len) < 0) {
         if (m != NULL) {
             snapshot_module_close(m);
         }
@@ -475,22 +461,33 @@ static int driverom_snapshot_open(snapshot_t *s, unsigned int unit, snapshot_mod
     return 0;
 }
 
-int driverom_snapshot_validate_version(snapshot_t *s, unsigned int unit)
+int driverom_snapshot_validate(snapshot_t *s, unsigned int unit, unsigned int type)
 {
     snapshot_module_t *m;
+    unsigned int offset, len;
+    int result;
 
     if (driverom_snapshot_open(s, unit, &m) < 0) {
         return -1;
     }
-    return m ? snapshot_module_close(m) : 0;
+    if (!m) {
+        return 0;
+    }
+
+    len = driverom_snapshot_size(type, &offset);
+    result = len ? snapshot_module_skip_bytes(m, len) : -1;
+    if (snapshot_module_close(m) < 0) {
+        return -1;
+    }
+    return result;
 }
 
 int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
 {
     snapshot_module_t *m;
     diskunit_context_t *unit = drive->diskunit;
-    uint8_t *base;
-    int len;
+    unsigned int offset;
+    unsigned int len;
 
     if (driverom_snapshot_open(s, unit->mynumber, &m) < 0) {
         return -1;
@@ -499,82 +496,13 @@ int driverom_snapshot_read(snapshot_t *s, drive_t *drive)
         return 0;
     }
 
-    switch (unit->type) {
-        case DRIVE_TYPE_1540:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1540_SIZE;
-            break;
-        case DRIVE_TYPE_1541:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1541_SIZE;
-            break;
-        case DRIVE_TYPE_1541II:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1541II_SIZE;
-            break;
-        case DRIVE_TYPE_1551:
-            base = unit->rom;
-            len = DRIVE_ROM1551_SIZE;
-            break;
-        case DRIVE_TYPE_1570:
-            base = unit->rom;
-            len = DRIVE_ROM1570_SIZE;
-            break;
-        case DRIVE_TYPE_1571:
-            base = unit->rom;
-            len = DRIVE_ROM1571_SIZE;
-            break;
-        case DRIVE_TYPE_1571CR:
-            base = unit->rom;
-            len = DRIVE_ROM1571CR_SIZE;
-            break;
-        case DRIVE_TYPE_1581:
-            base = unit->rom;
-            len = DRIVE_ROM1581_SIZE;
-            break;
-        case DRIVE_TYPE_2000:
-            base = unit->rom;
-            len = DRIVE_ROM2000_SIZE;
-            break;
-        case DRIVE_TYPE_4000:
-            base = unit->rom;
-            len = DRIVE_ROM4000_SIZE;
-            break;
-        case DRIVE_TYPE_CMDHD:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROMCMDHD_SIZE;
-            break;
-        case DRIVE_TYPE_2031:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM2031_SIZE;
-            break;
-        case DRIVE_TYPE_2040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM2040_SIZE]);
-            len = DRIVE_ROM2040_SIZE;
-            break;
-        case DRIVE_TYPE_3040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM3040_SIZE]);
-            len = DRIVE_ROM3040_SIZE;
-            break;
-        case DRIVE_TYPE_4040:
-            base = &(unit->rom[DRIVE_ROM_SIZE - DRIVE_ROM4040_SIZE]);
-            len = DRIVE_ROM4040_SIZE;
-            break;
-        case DRIVE_TYPE_1001:
-        case DRIVE_TYPE_8050:
-        case DRIVE_TYPE_8250:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM1001_SIZE;
-            break;
-        case DRIVE_TYPE_9000:
-            base = &(unit->rom[0x4000]);
-            len = DRIVE_ROM9000_SIZE;
-            break;
-        default:
-            return -1;
+    len = driverom_snapshot_size(unit->type, &offset);
+    if (!len) {
+        snapshot_module_close(m);
+        return -1;
     }
 
-    if (SMR_BA(m, base, len) < 0) {
+    if (SMR_BA(m, unit->rom + offset, len) < 0) {
         if (m != NULL) {
             snapshot_module_close(m);
         }
