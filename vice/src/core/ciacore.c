@@ -2332,6 +2332,30 @@ int ciacore_snapshot_write_module(cia_context_t *cia_context, snapshot_t *s)
     return 0;
 }
 
+static snapshot_module_t *ciacore_snapshot_open(const cia_context_t *cia_context, snapshot_t *s,
+                                                uint8_t *major, uint8_t *minor)
+{
+    snapshot_module_t *m = snapshot_module_open(s, cia_context->myname, major, minor);
+
+    if (m && *major != CIA_DUMP_VER_MAJOR) {
+        log_error(cia_context->log,
+                  "Incompatible CIA snapshot version %u.%u (expected major version %u).",
+                  (unsigned int)*major, (unsigned int)*minor, (unsigned int)CIA_DUMP_VER_MAJOR);
+        snapshot_module_close(m);
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+        return NULL;
+    }
+    return m;
+}
+
+int ciacore_snapshot_validate_module(const cia_context_t *cia_context, snapshot_t *s)
+{
+    uint8_t major, minor;
+    snapshot_module_t *m = ciacore_snapshot_open(cia_context, s, &major, &minor);
+
+    return m ? snapshot_module_close(m) : -1;
+}
+
 int ciacore_snapshot_read_module(cia_context_t *cia_context, snapshot_t *s)
 {
     uint8_t vmajor, vminor;
@@ -2341,17 +2365,8 @@ int ciacore_snapshot_read_module(cia_context_t *cia_context, snapshot_t *s)
     snapshot_module_t *m;
     uint16_t cia_tal, cia_tbl, cia_tac, cia_tbc;
 
-    m = snapshot_module_open(s, cia_context->myname, &vmajor, &vminor);
-
+    m = ciacore_snapshot_open(cia_context, s, &vmajor, &vminor);
     if (m == NULL) {
-        return -1;
-    }
-
-    if (vmajor != CIA_DUMP_VER_MAJOR) {
-        log_error(cia_context->log,
-                  "Snapshot module version (%d.%d) newer than %d.%d.",
-                  vmajor, vminor, CIA_DUMP_VER_MAJOR, CIA_DUMP_VER_MINOR);
-        snapshot_module_close(m);
         return -1;
     }
 

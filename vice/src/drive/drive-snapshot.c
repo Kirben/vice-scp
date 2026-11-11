@@ -34,6 +34,7 @@
 
 #include "archdep.h"
 #include "attach.h"
+#include "cia.h"
 #include "diskconstants.h"
 #include "diskimage.h"
 #include "drive-snapshot.h"
@@ -767,13 +768,13 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 return -1;
             }
             if (mfm_captures[unr]) {
-                int controller_ok = restored_type == DRIVE_TYPE_1581
-                    ? wd1770_snapshot_validate_module(unit->wd1770, s)
+                int invalid_controller = restored_type == DRIVE_TYPE_1581
+                    ? (ciacore_snapshot_validate_module(unit->cia1581, s) < 0
+                       || wd1770_snapshot_validate_module(unit->wd1770, s) < 0)
                     : (viacore_snapshot_validate_module(unit->via4000, s) < 0
-                       || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0
-                       ? -1 : 0);
+                       || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0);
 
-                if (controller_ok < 0) {
+                if (invalid_controller) {
                     snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                     return -1;
                 }

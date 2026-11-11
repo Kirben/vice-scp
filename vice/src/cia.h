@@ -214,6 +214,7 @@ void ciacore_set_sp(struct cia_context_s *cia_context, bool data);
 
 int ciacore_snapshot_write_module(struct cia_context_s *cia_context, struct snapshot_s *s);
 int ciacore_snapshot_read_module(struct cia_context_s *cia_context, struct snapshot_s *s);
+int ciacore_snapshot_validate_module(const struct cia_context_s *cia_context, struct snapshot_s *s);
 int ciacore_dump(cia_context_t *cia_context);
 
 #endif
