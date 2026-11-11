@@ -231,7 +231,7 @@ static int has_1571_clock_switch(unsigned int type)
     return type == DRIVE_TYPE_1570 || type == DRIVE_TYPE_1571 || type == DRIVE_TYPE_1571CR;
 }
 
-int drive_flux_snapshot_validate(const drive_t *drive, unsigned int halftrack)
+int drive_flux_snapshot_validate(const drive_t *drive, unsigned int halftrack, int read_only)
 {
     return halftrack >= 2 && halftrack <= FLUX_CAPTURE_TRACKS + 1
         && drive->diskunit->type != DRIVE_TYPE_1581
@@ -239,8 +239,8 @@ int drive_flux_snapshot_validate(const drive_t *drive, unsigned int halftrack)
         && (has_1571_clock_switch(drive->diskunit->type)
             ? (drive->diskunit->clock_frequency == 1 || drive->diskunit->clock_frequency == 2)
             : drive->diskunit->clock_frequency == (drive->diskunit->type == DRIVE_TYPE_1551 ? 2 : 1))
-        && (unsigned int)drive->read_only <= 1
-        && (drive->read_only || drive_check_scp_write(drive->diskunit->type, 0))
+        && (unsigned int)read_only <= 1
+        && (read_only || drive_check_scp_write(drive->diskunit->type, 0))
         && drive->snap_speed_zone <= 3 && drive->snap_ue7_dcba <= 3
         && drive->snap_ue7_counter <= 15 && drive->snap_uf4_counter <= 15
         && drive->snap_bit_counter >= 0 && drive->snap_bit_counter <= 7
@@ -318,7 +318,7 @@ int drive_flux_snapshot_write(snapshot_t *s, drive_t *drive,
 }
 
 int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
-                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side)
+                               unsigned int unit, unsigned int number, unsigned int halftrack, unsigned int side, int read_only)
 {
     char name[16];
     uint8_t major;
@@ -330,7 +330,6 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     uint8_t phase;
     uint8_t speed = 5;
     uint8_t source_phase = 0;
-    int read_only = drive->read_only;
     uint8_t expected[20];
     uint8_t actual[20];
     uint8_t alignment = 0;
@@ -373,7 +372,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     state.motor = motor;
     state.inclusive = inclusive;
     writable = minor == 3 || minor == 5;
-    if (drive_flux_snapshot_validate(drive, halftrack) < 0
+    if (drive_flux_snapshot_validate(drive, halftrack, read_only) < 0
         || (!writable && !read_only)
         || (minor >= 4) != has_1571_clock_switch(drive->diskunit->type)
         || rotation_flux_track(halftrack, side, alignment) != ht

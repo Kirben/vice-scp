@@ -554,6 +554,7 @@ int drive_snapshot_read_module(snapshot_t *s)
     diskunit_context_t *unit;
     int half_track[NUM_DISK_UNITS];
     unsigned int native_side[NUM_DISK_UNITS] = {0};
+    int native_read_only[NUM_DISK_UNITS] = {0};
     int has_drives[NUM_DISK_UNITS];
     int native_backend[NUM_DISK_UNITS] = {0};
     uint8_t ieee_masks[NUM_DISK_UNITS] = {0};
@@ -699,7 +700,11 @@ int drive_snapshot_read_module(snapshot_t *s)
                 }
                 if (minor_version != 2) {
                     unit->type = restored_type;
-                    drive->read_only = restored_read_only;
+                    if (minor_version == 1) {
+                        native_read_only[unr] = restored_read_only;
+                    } else {
+                        drive->read_only = restored_read_only;
+                    }
                 }
             }
         }
@@ -724,7 +729,7 @@ int drive_snapshot_read_module(snapshot_t *s)
             snapshot_module_close(m);
             return -1;
         }
-        if (minor_version == 1 && drive_flux_snapshot_validate(unit->drives[0], half_track[unr]) < 0) {
+        if (minor_version == 1 && drive_flux_snapshot_validate(unit->drives[0], half_track[unr], native_read_only[unr]) < 0) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             log_error(unit->log, "Native flux snapshot has an unsupported drive or invalid circuit state.");
             snapshot_module_close(m);
@@ -856,7 +861,8 @@ int drive_snapshot_read_module(snapshot_t *s)
                 }
                 if (native_backend[unr] == 1) {
                     unit = diskunit_context[unr];
-                    if (drive_flux_snapshot_read(s, unit->drives[dnr], unr + 8, dnr, half_track[unr], native_side[unr]) < 0) {
+                    if (drive_flux_snapshot_read(s, unit->drives[dnr], unr + 8, dnr, half_track[unr],
+                                                 native_side[unr], native_read_only[unr]) < 0) {
                         return -1;
                     }
                 } else if (drive_snapshot_read_image_module(s, unr) < 0

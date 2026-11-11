@@ -329,7 +329,7 @@ uint64_t fsimage_scp_physical_turn(const disk_image_t *image, unsigned int slot)
 int fsimage_scp_can_write_slot(const disk_image_t *image, unsigned int slot)
 {
     const fsimage_t *fs = image ? image->media.fsimage : NULL;
-    if (!fs) {
+    if (!fs || image->read_only) {
         return 0;
     }
     return (!fs->flux_scp_turns || fsimage_scp_physical_turn(image, slot))
