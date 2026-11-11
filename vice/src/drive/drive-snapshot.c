@@ -768,7 +768,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 }
             }
         }
-        if (has_tde[unr] && !drive_check_bus(restored_type, available_busses)) {
+        if (has_tde[unr] && (!drive_check_bus(restored_type, available_busses)
+            || (restored_type == DRIVE_TYPE_1551 && unr > 1))) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             snapshot_module_close(m);
             return -1;
