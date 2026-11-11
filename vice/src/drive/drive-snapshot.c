@@ -242,7 +242,7 @@ static int snapshot_embeds_flux(snapshot_t *s, unsigned int unit, unsigned int b
 }
 
 static int read_ieee_flux(snapshot_t *s, const diskunit_context_t *unit,
-                         unsigned int address, unsigned int mask, int embed,
+                         unsigned int address, unsigned int type, unsigned int mask, int embed,
                          const int read_only[NUM_DRIVES], flux_capture_t *captures[NUM_DRIVES])
 {
     unsigned int number;
@@ -252,6 +252,13 @@ static int read_ieee_flux(snapshot_t *s, const diskunit_context_t *unit,
             if ((unsigned int)read_only[number] > 1
                 || drive_sector_flux_snapshot_read(s, unit->drives[number], address,
                     number, 0, embed, read_only[number], &captures[number]) < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
+            }
+            const flux_capture_t *capture = captures[number] ? captures[number]
+                : disk_image_flux_capture_get(unit->drives[number]->image);
+
+            if (!drive_check_scp_gcr(type, flux_capture_flags(capture))) {
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
@@ -805,7 +812,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         snapshot_module_close(m);
         m = NULL;
         if (minor_version == 3
-            && read_ieee_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr],
+            && read_ieee_flux(s, unit, unr + 8, restored_type, ieee_masks[unr], ieee_embed[unr],
                               restore_read_only[unr], ieee_captures[unr]) < 0) {
             return -1;
         }
