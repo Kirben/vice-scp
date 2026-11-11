@@ -818,6 +818,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         if (minor_version == 2) {
             const flux_capture_t *capture;
             int switch_controller;
+            int invalid_controller;
 
             drive = unit->drives[0];
             switch_controller = flux_backend(drive) == 2
@@ -833,24 +834,17 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
-            if (mfm_captures[unr]) {
-                int invalid_controller = restored_type == DRIVE_TYPE_1581
-                    ? (!unit->cia1581 || !unit->wd1770
-                       || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
-                       || wd1770_snapshot_validate_module(unit->wd1770, s) < 0)
-                    : (!unit->via4000 || !unit->pc8477
-                       || viacore_snapshot_validate_module(unit->via4000, s) < 0
-                       || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0);
-
-                if (invalid_controller) {
-                    snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
-                    return -1;
-                }
-            }
+            invalid_controller = restored_type == DRIVE_TYPE_1581
+                ? (!unit->cia1581 || !unit->wd1770
+                   || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
+                   || wd1770_snapshot_validate_module(unit->wd1770, s) < 0)
+                : (!unit->via4000 || !unit->pc8477
+                   || viacore_snapshot_validate_module(unit->via4000, s) < 0
+                   || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0);
             /* Each unit has four FDD IDs. WD1770 uses the first and
                PC8477 uses the second for the attached mechanism. */
-            if (mfm_captures[unr]
-                && fdd_snapshot_validate(s, 4 * unr + (restored_type != DRIVE_TYPE_1581),
+            if (invalid_controller
+                || fdd_snapshot_validate(s, 4 * unr + (restored_type != DRIVE_TYPE_1581),
                                              capture, restored_read_only) < 0) {
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
