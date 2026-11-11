@@ -541,7 +541,8 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
     return s;
 }
 
-static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS])
+static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS],
+                               int (*read_machine_modules)(snapshot_t *, int), int event_mode)
 {
     uint8_t major_version, minor_version;
     int unr, dnr;
@@ -553,6 +554,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     CLOCK detach_clk[NUM_DISK_UNITS];
     CLOCK attach_detach_clk[NUM_DISK_UNITS];
     int sync_factor;
+    int has_saved_sync_factor = 0;
     drive_t *drive;
     diskunit_context_t *unit;
     int half_track[NUM_DISK_UNITS];
@@ -637,6 +639,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_module_close(m);
                 return -1;
             }
+
+            has_saved_sync_factor = 1;
 
             for (dnr = 0; dnr < has_drives[unr]; dnr++) {
                 /* read info for each individual drive */
@@ -839,6 +843,17 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             if (driverom_snapshot_validate(s, unr, restore_type[unr]) < 0) {
                 return -1;
             }
+        }
+    }
+
+    if (read_machine_modules) {
+        /* The VIC-II reader needs the saved video standard. Apply it before
+           reading the remaining machine modules, with the old disks mounted. */
+        if (has_saved_sync_factor) {
+            resources_set_int("MachineVideoStandard", sync_factor);
+        }
+        if (read_machine_modules(s, event_mode) < 0) {
+            return -1;
         }
     }
 
@@ -1067,6 +1082,45 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     return 0;
 }
 
+static int has_mounted_scp(void)
+{
+    unsigned int unit, drive;
+
+    for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
+        for (drive = 0; drive < NUM_DRIVES; ++drive) {
+            const disk_image_t *image = file_system_get_image(unit + 8, drive);
+
+            if (image && image->type == DISK_IMAGE_TYPE_SCP) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int drive_snapshot_read_with_machine_modules(snapshot_t *s,
+    int (*read_machine_modules)(snapshot_t *, int), int event_mode)
+{
+    flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
+    int preserve_scp = read_machine_modules && has_mounted_scp();
+    int result = read_drive_snapshot(s, mfm_captures,
+                                     preserve_scp ? read_machine_modules : NULL, event_mode);
+    unsigned int unit;
+
+    for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
+        flux_capture_destroy(mfm_captures[unit]);
+    }
+    if (result == 0 && read_machine_modules && !preserve_scp) {
+        result = read_machine_modules(s, event_mode);
+    }
+    return result;
+}
+
+int drive_snapshot_read_module(snapshot_t *s)
+{
+    return drive_snapshot_read_with_machine_modules(s, NULL, 0);
+}
+
 /* -------------------------------------------------------------------- */
 /* read/write "normal" disk image snapshot module */
 
@@ -1081,19 +1135,6 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
  *                      disk image
  *
  */
-
-int drive_snapshot_read_module(snapshot_t *s)
-{
-    flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
-    int result = read_drive_snapshot(s, mfm_captures);
-    unsigned int unit;
-
-    for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
-        flux_capture_destroy(mfm_captures[unit]);
-    }
-    return result;
-}
-
 
 static int drive_snapshot_write_image_module(snapshot_t *s, unsigned int dnr)
 {
