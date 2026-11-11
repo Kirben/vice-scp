@@ -558,6 +558,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     int native_read_only[NUM_DISK_UNITS] = {0};
     int has_drives[NUM_DISK_UNITS];
     int native_backend[NUM_DISK_UNITS] = {0};
+    unsigned int restore_type[NUM_DISK_UNITS];
+    unsigned int detach_mask[NUM_DISK_UNITS] = {0};
+    int restore_read_only[NUM_DISK_UNITS][NUM_DRIVES];
     uint8_t ieee_masks[NUM_DISK_UNITS] = {0};
     uint8_t ieee_embed[NUM_DISK_UNITS] = {0};
 
@@ -568,20 +571,13 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         int restored_read_only = 0;
 
         unit = diskunit_context[unr];
+        restore_type[unr] = unit->type;
 
         /* read info that is common for one unit */
         sprintf(snap_module_name, "DRIVE%i", 8 + unr);
         m = snapshot_module_open(s, snap_module_name, &major_version, &minor_version);
         if (m == NULL || minor_version != 3) {
-            unsigned int mask = ieee_scp_mask(unit);
-            for (dnr = 0; dnr < NUM_DRIVES; dnr++) {
-                if ((mask & (1U << dnr)) && detach_snapshot_disk(unr + 8, dnr) < 0) {
-                    if (m != NULL) {
-                        snapshot_module_close(m);
-                    }
-                    return -1;
-                }
-            }
+            detach_mask[unr] |= ieee_scp_mask(unit);
         }
         if (m == NULL) {
             if ((native_flux_module_present(s, unr + 8, 0) != 0
@@ -591,10 +587,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             }
             /* If this module is not found true emulation is off.  */
             /*resources_set_int("DriveTrueEmulation", 0);*/
-            if (flux_backend(unit->drives[0]) && detach_snapshot_disk(unr + 8, 0) < 0) {
-                return -1;
+            if (flux_backend(unit->drives[0])) {
+                detach_mask[unr] |= 1;
             }
-            resources_set_int_sprintf("Drive%iTrueEmulation", 0, unr + 8);
             has_tde[unr] = 0;
             continue;
         }
@@ -614,10 +609,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
 
         /* Legacy snapshots cannot leave a current native backend active. */
-        if (flux_backend(unit->drives[0]) && flux_backend(unit->drives[0]) != minor_version
-            && detach_snapshot_disk(unr + 8, 0) < 0) {
-            snapshot_module_close(m);
-            return -1;
+        if (flux_backend(unit->drives[0]) && flux_backend(unit->drives[0]) != minor_version) {
+            detach_mask[unr] |= 1;
         }
 
         if (0
@@ -631,7 +624,6 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             snapshot_module_close(m);
             return -1;
         }
-        resources_set_int_sprintf("Drive%iTrueEmulation", has_tde[unr], unr + 8);
 
         DBG(("reading snapshot module: '%s' with TDE %s, Drives: %i\n",
              snap_module_name, has_tde[unr] ? "enabled" : "disabled", has_drives[unr]));
@@ -699,24 +691,21 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                     snapshot_module_close(m);
                     return -1;
                 }
-                if (minor_version != 2) {
-                    unit->type = restored_type;
-                    if (minor_version == 1) {
-                        native_read_only[unr] = restored_read_only;
-                    } else {
-                        drive->read_only = restored_read_only;
-                    }
+                restore_type[unr] = restored_type;
+                restore_read_only[unr][dnr] = restored_read_only;
+                if (minor_version == 1) {
+                    native_read_only[unr] = restored_read_only;
                 }
             }
         }
-        if (minor_version == 1 && drive_get_num_heads(unit->type) == 2
+        if (minor_version == 1 && drive_get_num_heads(restored_type) == 2
             && half_track[unr] > DRIVE_HALFTRACKS_1571 + 1) {
             native_side[unr] = 1;
             half_track[unr] -= DRIVE_HALFTRACKS_1571;
         }
         if (minor_version == 3
-            && (!drive_check_scp_ieee(unit->type)
-                || has_drives[unr] != (drive_check_dual(unit->type) ? NUM_DRIVES : 1)
+            && (!drive_check_scp_ieee(restored_type)
+                || has_drives[unr] != (drive_check_dual(restored_type) ? NUM_DRIVES : 1)
                 || SMR_B(m, &ieee_masks[unr]) < 0 || !ieee_masks[unr]
                 || ieee_masks[unr] >= (1U << has_drives[unr])
                 || SMR_B(m, &ieee_embed[unr]) < 0 || ieee_embed[unr] > 1)) {
@@ -730,11 +719,19 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             snapshot_module_close(m);
             return -1;
         }
-        if (minor_version == 1 && drive_flux_snapshot_validate(unit->drives[0], half_track[unr], native_read_only[unr]) < 0) {
-            snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
-            log_error(unit->log, "Native flux snapshot has an unsupported drive or invalid circuit state.");
-            snapshot_module_close(m);
-            return -1;
+        if (minor_version == 1) {
+            unsigned int current_type = unit->type;
+            int result;
+
+            unit->type = restored_type;
+            result = drive_flux_snapshot_validate(unit->drives[0], half_track[unr], native_read_only[unr]);
+            unit->type = current_type;
+            if (result < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                log_error(unit->log, "Native flux snapshot has an unsupported drive or invalid circuit state.");
+                snapshot_module_close(m);
+                return -1;
+            }
         }
         snapshot_module_close(m);
         m = NULL;
@@ -774,11 +771,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
-            /* Detach through the old controller after validating the replacement. */
-            if (switch_controller && detach_snapshot_disk(unr + 8, 0) < 0) {
-                return -1;
+            if (switch_controller) {
+                detach_mask[unr] |= 1;
             }
-            unit->type = restored_type;
             native_read_only[unr] = restored_read_only;
         }
         if (minor_version == 0 && (native_flux_module_present(s, unr + 8, 0) != 0
@@ -787,6 +782,26 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                empty image if its required backend marker was lost. */
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             return -1;
+        }
+    }
+
+    /* Keep all SCP attachments until every unit has passed validation.
+       Detach through each unit's original controller before changing types. */
+    for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
+        for (dnr = 0; dnr < NUM_DRIVES; ++dnr) {
+            if ((detach_mask[unr] & (1U << dnr)) && detach_snapshot_disk(unr + 8, dnr) < 0) {
+                return -1;
+            }
+        }
+    }
+    for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
+        unit = diskunit_context[unr];
+        resources_set_int_sprintf("Drive%iTrueEmulation", has_tde[unr], unr + 8);
+        unit->type = restore_type[unr];
+        if (has_tde[unr] && native_backend[unr] != 1 && native_backend[unr] != 2) {
+            for (dnr = 0; dnr < has_drives[unr]; ++dnr) {
+                unit->drives[dnr]->read_only = restore_read_only[unr][dnr];
+            }
         }
     }
 
