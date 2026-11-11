@@ -801,17 +801,27 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
     }
 
-    /* CPU modules are required for enabled drives. Check for them before
-       any old controller can lose its disk. */
+    /* Check required CPU modules before any old controller can lose its disk. */
     for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
         if (has_tde[unr] && restore_type[unr] != DRIVE_TYPE_NONE) {
             const char *name = diskunit_context[unr]->cpu->snap_module_name;
+            int use_65c02 = restore_type[unr] == DRIVE_TYPE_2000
+                || restore_type[unr] == DRIVE_TYPE_4000
+                || restore_type[unr] == DRIVE_TYPE_CMDHD;
+            int compatible;
 
             m = snapshot_module_open(s, name, &major_version, &minor_version);
             if (m == NULL) {
                 return -1;
             }
+            compatible = use_65c02
+                ? drivecpu65c02_snapshot_version_supported(major_version, minor_version)
+                : drivecpu_snapshot_version_supported(major_version, minor_version);
             if (snapshot_module_close(m) < 0) {
+                return -1;
+            }
+            if (!compatible) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
         }

@@ -536,6 +536,11 @@ static int read_drive_clock(snapshot_module_t *m, unsigned int minor, CLOCK *clo
     return 0;
 }
 
+int drivecpu65c02_snapshot_version_supported(uint8_t major, uint8_t minor)
+{
+    return major == SNAP_MAJOR && minor <= SNAP_MINOR;
+}
+
 int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
 {
     uint8_t major, minor;
@@ -551,7 +556,7 @@ int drivecpu65c02_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
         return -1;
     }
 
-    if (major != SNAP_MAJOR || minor > SNAP_MINOR) {
+    if (!drivecpu65c02_snapshot_version_supported(major, minor)) {
         snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
         goto fail;
     }

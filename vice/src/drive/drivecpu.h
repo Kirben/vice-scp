@@ -56,6 +56,7 @@ void drivecpu_set_overflow(struct diskunit_context_s *drv);
 void drivecpu_execute(struct diskunit_context_s *drv, CLOCK clk_value);
 int drivecpu_snapshot_write_module(struct diskunit_context_s *drv,
                                    struct snapshot_s *s);
+int drivecpu_snapshot_version_supported(uint8_t major, uint8_t minor);
 int drivecpu_snapshot_read_module(struct diskunit_context_s *drv,
                                   struct snapshot_s *s);
 

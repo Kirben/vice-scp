@@ -664,6 +664,11 @@ fail:
     return -1;
 }
 
+int drivecpu_snapshot_version_supported(uint8_t major, uint8_t minor)
+{
+    return major == SNAP_MAJOR && minor <= SNAP_MINOR;
+}
+
 int drivecpu_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
 {
     uint8_t major, minor;
@@ -676,6 +681,12 @@ int drivecpu_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
 
     m = snapshot_module_open(s, drv->cpu->snap_module_name, &major, &minor);
     if (m == NULL) {
+        return -1;
+    }
+
+    if (!drivecpu_snapshot_version_supported(major, minor)) {
+        snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+        snapshot_module_close(m);
         return -1;
     }
 

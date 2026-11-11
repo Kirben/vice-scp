@@ -53,6 +53,7 @@ void drivecpu65c02_trigger_reset(unsigned int dnr);
 
 void drivecpu65c02_execute(struct diskunit_context_s *drv, CLOCK clk_value);
 int drivecpu65c02_snapshot_write_module(struct diskunit_context_s *drv, struct snapshot_s *s);
+int drivecpu65c02_snapshot_version_supported(uint8_t major, uint8_t minor);
 int drivecpu65c02_snapshot_read_module(struct diskunit_context_s *drv, struct snapshot_s *s);
 
 #endif
