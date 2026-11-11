@@ -970,6 +970,7 @@ int fdd_snapshot_read_module(fd_drive_t *live, struct snapshot_s *s)
             || (drv->image->read_only ? vminor != 1 : vminor < 2)
             || drv->raw.dirty > 1 || (drv->raw.dirty && (vminor < 2
                 || drv->raw.track_head >= FLUX_CAPTURE_MAX_TRACKS))
+            || drv->head_invert != live->head_invert || (unsigned int)drv->head > 1
             || drv->disk_rate != expected_rate
             || drv->raw.head < 0 || drv->raw.head >= 25 * fdd_data_rates[expected_rate]
             || SMR_DW_UINT(m, &drv->flux_revolution) < 0
