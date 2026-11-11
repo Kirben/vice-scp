@@ -1058,18 +1058,18 @@ int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
     return fdd_snapshot_read(drv, s, capture, capture ? drv->image->read_only : 0);
 }
 
-int fdd_scp_snapshot_validate(struct snapshot_s *s, unsigned int number,
+int fdd_snapshot_validate(struct snapshot_s *s, unsigned int number,
                               const struct flux_capture_s *capture, int read_only)
 {
     fd_drive_t candidate = {0};
     char name[16];
     int result;
 
-    /* Use the geometry of the incoming SCP and never touch the live FDD. */
+    /* Validate against the incoming medium without touching the live FDD. */
     snprintf(name, sizeof(name), "FDD%u", number);
     candidate.myname = name;
     candidate.head_invert = 1;
-    candidate.disk_rate = fdd_scp_disk_rate(capture);
+    candidate.disk_rate = capture ? fdd_scp_disk_rate(capture) : 0;
     result = fdd_snapshot_read(&candidate, s, capture, read_only);
     lib_free(candidate.raw.data);
     lib_free(candidate.raw.sync);
