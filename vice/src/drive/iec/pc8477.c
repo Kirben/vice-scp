@@ -1496,7 +1496,7 @@ int pc8477_snapshot_write_module(pc8477_t *drv, snapshot_t *s)
     return fdd_snapshot_write_module(drv->fdds[1].fdd, s);
 }
 
-int pc8477_snapshot_read_module(pc8477_t *drv, snapshot_t *s)
+static int pc8477_snapshot_read(pc8477_t *drv, snapshot_t *s, int is8477, int validate_only)
 {
     pc8477_t restored = *drv;
     uint8_t major;
@@ -1537,7 +1537,7 @@ int pc8477_snapshot_read_module(pc8477_t *drv, snapshot_t *s)
     if (snapshot_module_close(m) < 0 || rc
         || (restored.rate != 250 && restored.rate != 300 && restored.rate != 500 && restored.rate != 1000)
         || (unsigned int)restored.step_rate > 15 || (unsigned int)restored.head_sel > 1
-        || restored.is8477 != drv->is8477
+        || restored.is8477 != is8477
         || restored.fifo_size < 1 || restored.fifo_size > (int)sizeof(restored.fifo)
         || (unsigned int)restored.fifop >= sizeof(restored.fifo)
         || (unsigned int)restored.fifop2 >= sizeof(restored.fifo)
@@ -1548,6 +1548,9 @@ int pc8477_snapshot_read_module(pc8477_t *drv, snapshot_t *s)
         || (unsigned int)restored.resp > sizeof(restored.res)) {
         snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
         return -1;
+    }
+    if (validate_only) {
+        return 0;
     }
     if (fdd_snapshot_read_module(drv->fdds[1].fdd, s) < 0) {
         return -1;
@@ -1563,6 +1566,16 @@ int pc8477_snapshot_read_module(pc8477_t *drv, snapshot_t *s)
         alarm_set(drv->seek_alarm, seek_clk);
     }
     return 0;
+}
+
+int pc8477_snapshot_read_module(pc8477_t *drv, snapshot_t *s)
+{
+    return pc8477_snapshot_read(drv, s, drv->is8477, 0);
+}
+
+int pc8477_snapshot_validate_module(pc8477_t *drv, snapshot_t *s, int is8477)
+{
+    return pc8477_snapshot_read(drv, s, is8477, 1);
 }
 
 #undef PC8477_STATE_FIELDS

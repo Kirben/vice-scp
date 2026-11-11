@@ -55,5 +55,6 @@ int pc8477_detach_image(struct disk_image_s *image, unsigned int unit);
 
 int pc8477_snapshot_write_module(pc8477_t *drv, struct snapshot_s *s);
 int pc8477_snapshot_read_module(pc8477_t *drv, struct snapshot_s *s);
+int pc8477_snapshot_validate_module(pc8477_t *drv, struct snapshot_s *s, int is8477);
 
 #endif

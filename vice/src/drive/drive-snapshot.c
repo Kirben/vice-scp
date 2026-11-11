@@ -756,6 +756,16 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
+            if (mfm_captures[unr]) {
+                int controller_ok = restored_type == DRIVE_TYPE_1581
+                    ? wd1770_snapshot_validate_module(unit->wd1770, s)
+                    : pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000);
+
+                if (controller_ok < 0) {
+                    snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                    return -1;
+                }
+            }
             /* Each unit has four FDD IDs. WD1770 uses the first and
                PC8477 uses the second for the attached mechanism. */
             if (mfm_captures[unr]

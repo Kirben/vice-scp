@@ -1132,7 +1132,7 @@ int wd1770_snapshot_write_module(wd1770_t *drv, struct snapshot_s *s)
     return fdd_snapshot_write_module(drv->fdd, s);
 }
 
-int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
+static int wd1770_snapshot_read_state(wd1770_t *drv, struct snapshot_s *s)
 {
     uint8_t vmajor, vminor;
     snapshot_module_t *m;
@@ -1178,5 +1178,20 @@ int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
         return -1;
     }
 
+    return 0;
+}
+
+int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
+{
+    if (wd1770_snapshot_read_state(drv, s) < 0) {
+        return -1;
+    }
     return fdd_snapshot_read_module(drv->fdd, s);
+}
+
+int wd1770_snapshot_validate_module(const wd1770_t *drv, struct snapshot_s *s)
+{
+    wd1770_t candidate = *drv;
+
+    return wd1770_snapshot_read_state(&candidate, s);
 }

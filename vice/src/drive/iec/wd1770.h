@@ -56,5 +56,6 @@ void wd1770_set_motor(wd1770_t *drv, int on);
 
 int wd1770_snapshot_write_module(wd1770_t *drv, struct snapshot_s *s);
 int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s);
+int wd1770_snapshot_validate_module(const wd1770_t *drv, struct snapshot_s *s);
 
 #endif
