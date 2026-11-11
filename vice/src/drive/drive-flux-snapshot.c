@@ -335,6 +335,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     uint8_t alignment = 0;
     uint8_t writing;
     int writable;
+    unsigned int capture_flags;
     uint32_t count;
     uint32_t i;
     snapshot_module_t *m;
@@ -416,9 +417,12 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
         }
         capture = drive->flux->playback.capture;
     }
+    capture_flags = flux_capture_flags(capture);
     capture_identity(capture, actual);
-    if ((speed == 6 && !flux_capture_uses_360_clock(capture))
-        || (writable && !drive_check_scp_write(drive->diskunit->type, flux_capture_flags(capture)))
+    if (!drive_check_scp_gcr(drive->diskunit->type, capture_flags)
+        || ((capture_flags & FLUX_CAPTURE_DOUBLE_SIDED) && alignment)
+        || (speed == 6 && !flux_capture_uses_360_clock(capture))
+        || (writable && !drive_check_scp_write(drive->diskunit->type, capture_flags))
         || memcmp(expected, actual, sizeof(actual))
         || flux_playback_restore(&restored.playback, capture, &state) != FLUX_OK) {
         goto done;
