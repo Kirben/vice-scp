@@ -814,7 +814,7 @@ int fsimage_probe(disk_image_t *image)
     /* Signature-based flux recognition must precede all size-based probes.
        Explicit comparisons: negative errors are not successful recognition. */
     scp_result = fsimage_scp_read(image);
-    if (scp_result != SCP_FILE_NOT_MATCHED && scp_name) {
+    if (scp_name) {
         image->type = DISK_IMAGE_TYPE_SCP;
     }
     if (image->type == DISK_IMAGE_TYPE_SCP) {
