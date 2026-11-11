@@ -938,6 +938,10 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
             }
+            if (drive_check_old(restore_type[unr])
+                && validate_ieee_controller(s, unit, has_drives[unr]) < 0) {
+                return -1;
+            }
             if (restore_type[unr] == DRIVE_TYPE_1581
                 && (!unit->cia1581 || !unit->wd1770
                     || ciacore_snapshot_validate_module(unit->cia1581, s) < 0
