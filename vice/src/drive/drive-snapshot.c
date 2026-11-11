@@ -218,6 +218,22 @@ static int detach_snapshot_disk(unsigned int unit, unsigned int drive)
     return 0;
 }
 
+static int snapshot_embeds_mfm(snapshot_t *s, unsigned int unit)
+{
+    char name[16];
+    uint8_t major, minor, embedded;
+    snapshot_module_t *m;
+    int matches;
+
+    snprintf(name, sizeof(name), "FLUX%u:0", unit);
+    m = snapshot_module_open(s, name, &major, &minor);
+    if (!m) {
+        return 0;
+    }
+    matches = major == 2 && SMR_B(m, &embedded) == 0 && embedded == 1;
+    return snapshot_module_close(m) == 0 && matches;
+}
+
 static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
                                  unsigned int address, unsigned int mask, int embed, int mfm)
 {
@@ -506,6 +522,9 @@ int drive_snapshot_read_module(snapshot_t *s)
     drive_gcr_data_writeback_all();
 
     for (unr = 0; unr < NUM_DISK_UNITS; unr++) {
+        unsigned int restored_type = DRIVE_TYPE_NONE;
+        int restored_read_only = 0;
+
         unit = diskunit_context[unr];
 
         /* read info that is common for one unit */
@@ -600,9 +619,9 @@ int drive_snapshot_read_module(snapshot_t *s)
                     || SMR_B(m, &(drive->GCR_write_value)) < 0
                     || SMR_B_INT(m, &(unit->idling_method)) < 0
                     || SMR_B_INT(m, &(unit->parallel_cable)) < 0
-                    || SMR_B_INT(m, &(drive->read_only)) < 0
+                    || SMR_B_INT(m, &restored_read_only) < 0
                     || SMR_DW(m, &rotation_table_ptr[unr]) < 0
-                    || SMR_DW_UINT(m, &(unit->type)) < 0
+                    || SMR_DW_UINT(m, &restored_type) < 0
 
                     || SMR_DW_UL(m, &(drive->snap_accum)) < 0
                     || SMR_CLOCK(m, &(drive->snap_rotation_last_clk)) < 0
@@ -638,6 +657,10 @@ int drive_snapshot_read_module(snapshot_t *s)
                     snapshot_module_close(m);
                     return -1;
                 }
+                if (minor_version != 2) {
+                    unit->type = restored_type;
+                    drive->read_only = restored_read_only;
+                }
             }
         }
         if (minor_version == 1 && drive_get_num_heads(unit->type) == 2
@@ -669,6 +692,22 @@ int drive_snapshot_read_module(snapshot_t *s)
         }
         snapshot_module_close(m);
         m = NULL;
+        if (minor_version == 2) {
+            drive = unit->drives[0];
+            /* Flush and detach through the controller that owns the disk. */
+            if (flux_backend(drive) == 2
+                && (unit->type == DRIVE_TYPE_1581) != (restored_type == DRIVE_TYPE_1581)) {
+                if (!snapshot_embeds_mfm(s, unr + 8)) {
+                    snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                    return -1;
+                }
+                if (detach_snapshot_disk(unr + 8, 0) < 0) {
+                    return -1;
+                }
+            }
+            unit->type = restored_type;
+            drive->read_only = restored_read_only;
+        }
         if (minor_version == 0 && (native_flux_module_present(s, unr + 8, 0) != 0
                 || native_flux_module_present(s, unr + 8, 1) != 0)) {
             /* Native input must never be silently treated as a legacy or
