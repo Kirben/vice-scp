@@ -62,6 +62,7 @@
 #include "rotation.h"
 #include "snapshot.h"
 #include "types.h"
+#include "via.h"
 #include "vdrive-bam.h"
 #include "vdrive-snapshot.h"
 #include "zfile.h"
@@ -756,7 +757,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             if (mfm_captures[unr]) {
                 int controller_ok = restored_type == DRIVE_TYPE_1581
                     ? wd1770_snapshot_validate_module(unit->wd1770, s)
-                    : pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000);
+                    : (viacore_snapshot_validate_module(unit->via4000, s) < 0
+                       || pc8477_snapshot_validate_module(unit->pc8477, s, restored_type == DRIVE_TYPE_4000) < 0
+                       ? -1 : 0);
 
                 if (controller_ok < 0) {
                     snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);

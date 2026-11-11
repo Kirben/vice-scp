@@ -2018,7 +2018,7 @@ int viacore_snapshot_write_module(via_context_t *via_context, snapshot_t *s)
     return snapshot_module_close(m);
 }
 
-int viacore_snapshot_read_module(via_context_t *via_context, snapshot_t *s)
+static int viacore_snapshot_read(via_context_t *via_context, snapshot_t *s, int validate_only)
 {
     uint8_t vmajor, vminor;
     uint8_t byte;
@@ -2064,15 +2064,6 @@ int viacore_snapshot_read_module(via_context_t *via_context, snapshot_t *s)
         return -1;
     }
 
-    alarm_unset(via_context->t1_zero_alarm);
-    alarm_unset(via_context->t2_zero_alarm);
-    alarm_unset(via_context->t2_underflow_alarm);
-    alarm_unset(via_context->t2_shift_alarm);       /* TODO: load from snapshot */
-    alarm_unset(via_context->phi2_sr_alarm);
-
-    via_context->t1zero = 0;
-    via_context->t2xx00 = false;
-
     if (0
         || SMR_B(m, &(via_context->via[VIA_PRA])) < 0
         || SMR_B(m, &(via_context->via[VIA_DDRA])) < 0
@@ -2111,6 +2102,19 @@ int viacore_snapshot_read_module(via_context_t *via_context, snapshot_t *s)
         m2_t2_underflow_alarm = 0;
         m2_t2_shift_alarm = 0;
     }
+
+    if (validate_only) {
+        return snapshot_module_close(m);
+    }
+
+    alarm_unset(via_context->t1_zero_alarm);
+    alarm_unset(via_context->t2_zero_alarm);
+    alarm_unset(via_context->t2_underflow_alarm);
+    alarm_unset(via_context->t2_shift_alarm);
+    alarm_unset(via_context->phi2_sr_alarm);
+
+    via_context->t1zero = 0;
+    via_context->t2xx00 = false;
 
     addr = VIA_DDRA;
     byte = via_context->via[VIA_PRA] | ~(via_context->via[VIA_DDRA]);
@@ -2202,6 +2206,18 @@ int viacore_snapshot_read_module(via_context_t *via_context, snapshot_t *s)
     viacore_cache_cb12_io_status(via_context);
 
     return snapshot_module_close(m);
+}
+
+int viacore_snapshot_read_module(via_context_t *via_context, snapshot_t *s)
+{
+    return viacore_snapshot_read(via_context, s, 0);
+}
+
+int viacore_snapshot_validate_module(const via_context_t *via_context, snapshot_t *s)
+{
+    via_context_t candidate = *via_context;
+
+    return viacore_snapshot_read(&candidate, s, 1);
 }
 
 int viacore_dump(via_context_t *via_context)
