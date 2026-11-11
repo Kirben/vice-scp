@@ -92,6 +92,21 @@ int c128_snapshot_write(const char *name, int save_roms, int save_disks, int eve
     return 0;
 }
 
+static int read_remaining_modules(snapshot_t *s, int event_mode)
+{
+    if (fsdrive_snapshot_read_module(s) < 0
+        || vicii_snapshot_read_module(s) < 0
+        || event_snapshot_read_module(s, event_mode) < 0
+        || tapeport_snapshot_read_module(s) < 0
+        || keyboard_snapshot_read_module(s) < 0
+        || joyport_snapshot_read_module(s, JOYPORT_1) < 0
+        || joyport_snapshot_read_module(s, JOYPORT_2) < 0
+        || userport_snapshot_read_module(s) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
 int c128_snapshot_read(const char *name, int event_mode)
 {
     snapshot_t *s;
@@ -117,15 +132,7 @@ int c128_snapshot_read(const char *name, int event_mode)
         || ciacore_snapshot_read_module(machine_context.cia1, s) < 0
         || ciacore_snapshot_read_module(machine_context.cia2, s) < 0
         || sid_snapshot_read_module(s) < 0
-        || drive_snapshot_read_module(s) < 0
-        || fsdrive_snapshot_read_module(s) < 0
-        || vicii_snapshot_read_module(s) < 0
-        || event_snapshot_read_module(s, event_mode) < 0
-        || tapeport_snapshot_read_module(s) < 0
-        || keyboard_snapshot_read_module(s) < 0
-        || joyport_snapshot_read_module(s, JOYPORT_1) < 0
-        || joyport_snapshot_read_module(s, JOYPORT_2) < 0
-        || userport_snapshot_read_module(s) < 0) {
+        || drive_snapshot_read_with_machine_modules(s, read_remaining_modules, event_mode) < 0) {
         goto fail;
     }
 
