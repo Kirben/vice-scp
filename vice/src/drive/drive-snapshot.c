@@ -714,8 +714,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             snapshot_module_close(m);
             return -1;
         }
-        if (minor_version == 2 && (!drive_check_scp_mfm(unit->type, FLUX_CAPTURE_MFM)
-                                   || (unsigned int)unit->drives[0]->read_only > 1)) {
+        if (minor_version == 2 && (!drive_check_scp_mfm(restored_type, FLUX_CAPTURE_MFM)
+                                   || (unsigned int)restored_read_only > 1)) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             snapshot_module_close(m);
             return -1;
