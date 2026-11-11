@@ -914,8 +914,10 @@ int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s)
     return snapshot_module_close(m);
 }
 
-int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
+int fdd_snapshot_read_module(fd_drive_t *live, struct snapshot_s *s)
 {
+    fd_drive_t restored = *live;
+    fd_drive_t *drv = &restored;
     uint8_t vmajor, vminor;
     int expected_rate = drv->disk_rate;
     snapshot_module_t *m;
@@ -1011,17 +1013,25 @@ int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s)
         }
         drv->raw.phase = phase - 1;
     }
-    lib_free(drv->raw.data);
     drv->raw.data = lib_malloc((size_t)drv->raw.size);
-    lib_free(drv->raw.sync);
     drv->raw.sync = lib_malloc((size_t)((drv->raw.size + 7) >> 3));
 
-    if (0
-        || SMR_BA(m, drv->raw.data, (unsigned int)drv->raw.size) < 0
+    if (SMR_BA(m, drv->raw.data, (unsigned int)drv->raw.size) < 0
         || SMR_BA(m, drv->raw.sync, (unsigned int)((drv->raw.size + 7) >> 3)) < 0) {
         snapshot_module_close(m);
-        return -1;
+        goto discard;
+    }
+    if (snapshot_module_close(m) < 0) {
+        goto discard;
     }
 
-    return snapshot_module_close(m);
+    lib_free(live->raw.data);
+    lib_free(live->raw.sync);
+    *live = restored;
+    return 0;
+
+discard:
+    lib_free(drv->raw.data);
+    lib_free(drv->raw.sync);
+    return -1;
 }
