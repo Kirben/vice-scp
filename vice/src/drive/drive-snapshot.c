@@ -44,6 +44,7 @@
 #include "drive-sound.h"
 #include "drive.h"
 #include "drive-check.h"
+#include "fdc.h"
 #include "drivecpu.h"
 #include "drivecpu65c02.h"
 #include "drivemem.h"
@@ -741,6 +742,10 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         snapshot_module_close(m);
         m = NULL;
+        if (minor_version == 3 && drive_check_old(restored_type)
+            && fdc_snapshot_validate_module(s, unr, has_drives[unr]) < 0) {
+            return -1;
+        }
         if (minor_version == 1) {
             unsigned int current_type = unit->type;
             int result;
