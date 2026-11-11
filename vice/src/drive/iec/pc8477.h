@@ -49,6 +49,7 @@ void pc8477_reset(pc8477_t *drv, int is8477);
 int pc8477_irq(pc8477_t *drv);
 
 int pc8477_attach_image(struct disk_image_s *image, unsigned int unit);
+int pc8477_scp_write_pending(const struct diskunit_context_s *drv);
 void pc8477_flush_scp(struct diskunit_context_s *drv);
 int pc8477_detach_image(struct disk_image_s *image, unsigned int unit);
 

@@ -110,7 +110,7 @@ int pet_snapshot_read(const char *name, int event_mode)
     uint8_t minor, major;
     int ef = 0;
 
-    s = snapshot_open(name, &major, &minor, machine_name);
+    s = drive_snapshot_open(name, &major, &minor, machine_name);
 
     if (s == NULL) {
         return -1;

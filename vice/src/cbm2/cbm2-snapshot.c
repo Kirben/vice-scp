@@ -99,7 +99,7 @@ int cbm2_snapshot_read(const char *name, int event_mode)
     snapshot_t *s;
     uint8_t minor, major;
 
-    s = snapshot_open(name, &major, &minor, machine_get_name());
+    s = drive_snapshot_open(name, &major, &minor, machine_get_name());
 
     if (s == NULL) {
         return -1;

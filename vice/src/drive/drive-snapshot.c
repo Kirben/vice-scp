@@ -51,6 +51,8 @@
 #include "gcr.h"
 #include "iecbus.h"
 #include "iecdrive.h"
+#include "iec/pc8477.h"
+#include "iec/wd1770.h"
 #include "lib.h"
 #include "log.h"
 #include "machine-bus.h"
@@ -218,7 +220,7 @@ static int detach_snapshot_disk(unsigned int unit, unsigned int drive)
     return 0;
 }
 
-static int snapshot_embeds_mfm(snapshot_t *s, unsigned int unit)
+static int snapshot_embeds_flux(snapshot_t *s, unsigned int unit, unsigned int backend)
 {
     char name[16];
     uint8_t major, minor, embedded;
@@ -230,7 +232,7 @@ static int snapshot_embeds_mfm(snapshot_t *s, unsigned int unit)
     if (!m) {
         return 0;
     }
-    matches = major == 2 && SMR_B(m, &embedded) == 0 && embedded == 1;
+    matches = major == backend && SMR_B(m, &embedded) == 0 && embedded == 1;
     return snapshot_module_close(m) == 0 && matches;
 }
 
@@ -498,6 +500,44 @@ int drive_snapshot_write_module(snapshot_t *s, int save_disks, int save_roms)
     return 0;
 }
 
+/* An external snapshot must not replace writes that have yet to reach
+   the attached capture. An embedded snapshot can use the detach path. */
+static int check_pending_scp_writes(snapshot_t *s)
+{
+    unsigned int unr;
+
+    for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
+        diskunit_context_t *unit = diskunit_context[unr];
+        const drive_t *drive = unit->drives[0];
+        int backend = flux_backend(drive);
+        int pending = drive->flux && drive->flux->writing;
+
+        if (backend == 2) {
+            pending = unit->type == DRIVE_TYPE_1581
+                ? wd1770_scp_write_pending(unit) : pc8477_scp_write_pending(unit);
+        }
+        if (pending && native_flux_module_present(s, unr + 8, 0) != 0
+            && !snapshot_embeds_flux(s, unr + 8, backend)) {
+            log_error(unit->log, "Cannot restore an external SCP snapshot while a disk write is pending.");
+            snapshot_set_error(SNAPSHOT_CANNOT_READ_SNAPSHOT);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor,
+                                const char *machine_name)
+{
+    snapshot_t *s = snapshot_open(name, major, minor, machine_name);
+
+    if (s && check_pending_scp_writes(s) < 0) {
+        snapshot_close(s);
+        return NULL;
+    }
+    return s;
+}
+
 int drive_snapshot_read_module(snapshot_t *s)
 {
     uint8_t major_version, minor_version;
@@ -697,7 +737,7 @@ int drive_snapshot_read_module(snapshot_t *s)
             /* Flush and detach through the controller that owns the disk. */
             if (flux_backend(drive) == 2
                 && (unit->type == DRIVE_TYPE_1581) != (restored_type == DRIVE_TYPE_1581)) {
-                if (!snapshot_embeds_mfm(s, unr + 8)) {
+                if (!snapshot_embeds_flux(s, unr + 8, 2)) {
                     snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                     return -1;
                 }

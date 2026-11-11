@@ -999,6 +999,11 @@ int wd1770_attach_image(disk_image_t *image, unsigned int unit)
     return 0;
 }
 
+int wd1770_scp_write_pending(const diskunit_context_t *drv)
+{
+    return fdd_scp_write_pending(drv->wd1770->fdd);
+}
+
 void wd1770_flush_scp(diskunit_context_t *drv)
 {
     fdd_flush(drv->wd1770->fdd);

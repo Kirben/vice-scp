@@ -76,6 +76,8 @@ Embedded snapshots restore the captured media in memory. An embedded
 writable disk has no backing SCP file. Include disks in a subsequent
 snapshot to retain further changes. For an external snapshot, attach
 matching media with matching write protection before restoring.
+Let any pending write to the attached SCP finish before restoring an
+external snapshot.
 
 Developer validation
 --------------------

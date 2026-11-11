@@ -1404,6 +1404,11 @@ int pc8477_attach_image(disk_image_t *image, unsigned int unit)
     return 0;
 }
 
+int pc8477_scp_write_pending(const diskunit_context_t *drv)
+{
+    return fdd_scp_write_pending(drv->pc8477->fdds[1].fdd);
+}
+
 void pc8477_flush_scp(diskunit_context_t *drv)
 {
     fdd_flush(drv->pc8477->fdds[1].fdd);

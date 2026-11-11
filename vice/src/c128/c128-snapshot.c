@@ -97,7 +97,7 @@ int c128_snapshot_read(const char *name, int event_mode)
     snapshot_t *s;
     uint8_t minor, major;
 
-    s = snapshot_open(name, &major, &minor, SNAP_MACHINE_NAME);
+    s = drive_snapshot_open(name, &major, &minor, SNAP_MACHINE_NAME);
     if (s == NULL) {
         return -1;
     }
