@@ -545,6 +545,34 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
     return s;
 }
 
+static int validate_gcr_controller(snapshot_t *s, const diskunit_context_t *unit,
+                                   unsigned int type)
+{
+    switch (type) {
+        case DRIVE_TYPE_1570:
+        case DRIVE_TYPE_1571:
+        case DRIVE_TYPE_1571CR:
+            if (ciacore_snapshot_validate_module(unit->cia1571, s) < 0) {
+                return -1;
+            }
+            /* fall through */
+        case DRIVE_TYPE_1540:
+        case DRIVE_TYPE_1541:
+        case DRIVE_TYPE_1541II:
+            if (viacore_snapshot_validate_module(unit->via1d1541, s) < 0) {
+                return -1;
+            }
+            return viacore_snapshot_validate_module(unit->via2, s);
+        case DRIVE_TYPE_2031:
+            if (viacore_snapshot_validate_module(unit->via1d2031, s) < 0) {
+                return -1;
+            }
+            return viacore_snapshot_validate_module(unit->via2, s);
+        default:
+            return 0;
+    }
+}
+
 static int snapshot_changes_scp(snapshot_t *s);
 
 static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS],
@@ -764,6 +792,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         if (minor_version == 3 && drive_check_old(restored_type)
             && fdc_snapshot_validate_module(s, unr, has_drives[unr]) < 0) {
+            return -1;
+        }
+        if (minor_version == 1 && validate_gcr_controller(s, unit, restored_type) < 0) {
             return -1;
         }
         if (minor_version == 1) {
