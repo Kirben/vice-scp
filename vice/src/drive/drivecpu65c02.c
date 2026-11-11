@@ -536,6 +536,17 @@ static int read_drive_clock(snapshot_module_t *m, unsigned int minor, CLOCK *clo
     return 0;
 }
 
+unsigned int drivecpu65c02_snapshot_ram_size(unsigned int type, uint8_t minor)
+{
+    if (type == DRIVE_TYPE_CMDHD) {
+        return 0x10000;
+    }
+    if (type == DRIVE_TYPE_2000 || type == DRIVE_TYPE_4000) {
+        return minor >= 5 ? 0x4000 + 0x3000 : 0x2000;
+    }
+    return 0;
+}
+
 int drivecpu65c02_snapshot_version_supported(uint8_t major, uint8_t minor)
 {
     return major == SNAP_MAJOR && minor <= SNAP_MINOR;

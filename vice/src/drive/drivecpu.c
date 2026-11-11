@@ -590,10 +590,32 @@ static void drivecpu_jam(diskunit_context_t *drv)
 #define SNAP_MAJOR 1
 #define SNAP_MINOR 3
 
+unsigned int drivecpu_snapshot_ram_size(unsigned int type)
+{
+    switch (type) {
+        case DRIVE_TYPE_1540:
+        case DRIVE_TYPE_1541:
+        case DRIVE_TYPE_1541II:
+        case DRIVE_TYPE_1551:
+        case DRIVE_TYPE_1570:
+        case DRIVE_TYPE_1571:
+        case DRIVE_TYPE_1571CR:
+        case DRIVE_TYPE_2031:
+            return 0x800;
+        case DRIVE_TYPE_1581:
+        case DRIVE_TYPE_2000:
+        case DRIVE_TYPE_4000:
+            return 0x2000;
+        default:
+            return drive_check_old(type) ? 0x1100 : 0;
+    }
+}
+
 int drivecpu_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
 {
     snapshot_module_t *m;
     drivecpu_context_t *cpu;
+    unsigned int ram_size = drivecpu_snapshot_ram_size(drv->type);
 
     cpu = drv->cpu;
 
@@ -625,30 +647,8 @@ int drivecpu_snapshot_write_module(diskunit_context_t *drv, snapshot_t *s)
         goto fail;
     }
 
-    if (drv->type == DRIVE_TYPE_1540
-        || drv->type == DRIVE_TYPE_1541
-        || drv->type == DRIVE_TYPE_1541II
-        || drv->type == DRIVE_TYPE_1551
-        || drv->type == DRIVE_TYPE_1570
-        || drv->type == DRIVE_TYPE_1571
-        || drv->type == DRIVE_TYPE_1571CR
-        || drv->type == DRIVE_TYPE_2031) {
-        if (SMW_BA(m, drv->drive_ram, 0x800) < 0) {
-            goto fail;
-        }
-    }
-
-    if (drv->type == DRIVE_TYPE_1581
-        || drv->type == DRIVE_TYPE_2000
-        || drv->type == DRIVE_TYPE_4000) {
-        if (SMW_BA(m, drv->drive_ram, 0x2000) < 0) {
-            goto fail;
-        }
-    }
-    if (drive_check_old(drv->type)) {
-        if (SMW_BA(m, drv->drive_ram, 0x1100) < 0) {
-            goto fail;
-        }
+    if (ram_size && SMW_BA(m, drv->drive_ram, ram_size) < 0) {
+        goto fail;
     }
 
     if (interrupt_write_new_snapshot(cpu->int_status, m) < 0) {
@@ -676,6 +676,7 @@ int drivecpu_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
     uint8_t a, x, y, sp, status;
     uint16_t pc;
     drivecpu_context_t *cpu;
+    unsigned int ram_size = drivecpu_snapshot_ram_size(drv->type);
 
     cpu = drv->cpu;
 
@@ -729,31 +730,8 @@ int drivecpu_snapshot_read_module(diskunit_context_t *drv, snapshot_t *s)
         goto fail;
     }
 
-    if (drv->type == DRIVE_TYPE_1540
-        || drv->type == DRIVE_TYPE_1541
-        || drv->type == DRIVE_TYPE_1541II
-        || drv->type == DRIVE_TYPE_1551
-        || drv->type == DRIVE_TYPE_1570
-        || drv->type == DRIVE_TYPE_1571
-        || drv->type == DRIVE_TYPE_1571CR
-        || drv->type == DRIVE_TYPE_2031) {
-        if (SMR_BA(m, drv->drive_ram, 0x800) < 0) {
-            goto fail;
-        }
-    }
-
-    if (drv->type == DRIVE_TYPE_1581
-        || drv->type == DRIVE_TYPE_2000
-        || drv->type == DRIVE_TYPE_4000) {
-        if (SMR_BA(m, drv->drive_ram, 0x2000) < 0) {
-            goto fail;
-        }
-    }
-
-    if (drive_check_old(drv->type)) {
-        if (SMR_BA(m, drv->drive_ram, 0x1100) < 0) {
-            goto fail;
-        }
+    if (ram_size && SMR_BA(m, drv->drive_ram, ram_size) < 0) {
+        goto fail;
     }
 
     /* Update `*bank_base'.  */

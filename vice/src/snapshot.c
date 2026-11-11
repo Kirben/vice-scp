@@ -552,6 +552,21 @@ int snapshot_module_read_byte_array(snapshot_module_t *m, uint8_t *b_return, uns
     return snapshot_read_byte_array(m->file, b_return, num);
 }
 
+int snapshot_module_skip_bytes(snapshot_module_t *m, unsigned int size)
+{
+    uint8_t buffer[4096];
+
+    while (size) {
+        unsigned int count = size > sizeof(buffer) ? sizeof(buffer) : size;
+
+        if (snapshot_module_read_byte_array(m, buffer, count) < 0) {
+            return -1;
+        }
+        size -= count;
+    }
+    return 0;
+}
+
 int snapshot_module_read_word_array(snapshot_module_t *m, uint16_t *w_return, unsigned int num)
 {
     if ((long)(ftell(m->file) + num * sizeof(uint16_t)) > (long)(m->offset + m->size)) {

@@ -817,12 +817,24 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             compatible = use_65c02
                 ? drivecpu65c02_snapshot_version_supported(major_version, minor_version)
                 : drivecpu_snapshot_version_supported(major_version, minor_version);
-            if (snapshot_module_close(m) < 0) {
-                return -1;
-            }
             if (!compatible) {
+                snapshot_module_close(m);
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 return -1;
+            }
+            /* Five CPU clocks, seven register bytes, opcode info and bus
+               data, followed by the interrupt state and model-specific RAM. */
+            {
+                unsigned int clock_size = use_65c02 && minor_version < 4 ? 4 : 8;
+                unsigned int ram_size = use_65c02
+                    ? drivecpu65c02_snapshot_ram_size(restore_type[unr], minor_version)
+                    : drivecpu_snapshot_ram_size(restore_type[unr]);
+                unsigned int size = 5 * clock_size + 7 + 4 + 1 + 5 * 8 + 3 * 4 + ram_size;
+                int result = snapshot_module_skip_bytes(m, size);
+
+                if (snapshot_module_close(m) < 0 || result < 0) {
+                    return -1;
+                }
             }
             if (driverom_snapshot_validate_version(s, unr) < 0) {
                 return -1;
