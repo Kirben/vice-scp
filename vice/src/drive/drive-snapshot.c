@@ -571,6 +571,10 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     int native_backend[NUM_DISK_UNITS] = {0};
     unsigned int restore_type[NUM_DISK_UNITS];
     unsigned int detach_mask[NUM_DISK_UNITS] = {0};
+    drive_t restored_drive[NUM_DISK_UNITS][NUM_DRIVES];
+    int restored_clock[NUM_DISK_UNITS];
+    int restored_idle[NUM_DISK_UNITS];
+    int restored_cable[NUM_DISK_UNITS];
     int restore_read_only[NUM_DISK_UNITS][NUM_DRIVES];
     uint8_t ieee_masks[NUM_DISK_UNITS] = {0};
     uint8_t ieee_embed[NUM_DISK_UNITS] = {0};
@@ -651,21 +655,23 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
 
             for (dnr = 0; dnr < has_drives[unr]; dnr++) {
                 /* read info for each individual drive */
-                drive = unit->drives[dnr];
+                /* Keep live electronics intact until the snapshot is accepted. */
+                drive = &restored_drive[unr][dnr];
+                *drive = *unit->drives[dnr];
                 DBG(("unit %i drive %d (%p)\n", unr + 8, dnr, (void *)drive));
 
                 if (0
                     || SMR_CLOCK(m, &(attach_clk[unr])) < 0
                     || SMR_B_INT(m, (int *)&(drive->byte_ready_level)) < 0
-                    || SMR_B_INT(m, &(unit->clock_frequency)) < 0
+                    || SMR_B_INT(m, &restored_clock[unr]) < 0
                     || SMR_W_INT(m, &half_track[unr]) < 0
                     || SMR_CLOCK(m, &(detach_clk[unr])) < 0
                     || SMR_B_INT(m, &(drive->extend_image_policy)) < 0
                     || SMR_DW_UINT(m, &(drive->GCR_head_offset)) < 0
                     || SMR_B(m, &(drive->GCR_read)) < 0
                     || SMR_B(m, &(drive->GCR_write_value)) < 0
-                    || SMR_B_INT(m, &(unit->idling_method)) < 0
-                    || SMR_B_INT(m, &(unit->parallel_cable)) < 0
+                    || SMR_B_INT(m, &restored_idle[unr]) < 0
+                    || SMR_B_INT(m, &restored_cable[unr]) < 0
                     || SMR_B_INT(m, &restored_read_only) < 0
                     || SMR_DW(m, &rotation_table_ptr[unr]) < 0
                     || SMR_DW_UINT(m, &restored_type) < 0
@@ -734,11 +740,14 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         if (minor_version == 1) {
             unsigned int current_type = unit->type;
+            int current_clock = unit->clock_frequency;
             int result;
 
             unit->type = restored_type;
-            result = drive_flux_snapshot_validate(unit->drives[0], half_track[unr], native_read_only[unr]);
+            unit->clock_frequency = restored_clock[unr];
+            result = drive_flux_snapshot_validate(&restored_drive[unr][0], half_track[unr], native_read_only[unr]);
             unit->type = current_type;
+            unit->clock_frequency = current_clock;
             if (result < 0) {
                 snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 log_error(unit->log, "Native flux snapshot has an unsupported drive or invalid circuit state.");
@@ -759,12 +768,15 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         if (minor_version == 1) {
             unsigned int current_type = unit->type;
+            int current_clock = unit->clock_frequency;
             int result;
 
             unit->type = restored_type;
-            result = drive_flux_snapshot_read(s, unit->drives[0], unr + 8, 0, half_track[unr],
+            unit->clock_frequency = restored_clock[unr];
+            result = drive_flux_snapshot_read(s, &restored_drive[unr][0], unr + 8, 0, half_track[unr],
                                               native_side[unr], native_read_only[unr], 1);
             unit->type = current_type;
+            unit->clock_frequency = current_clock;
             if (result < 0) {
                 return -1;
             }
@@ -897,6 +909,45 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         unit = diskunit_context[unr];
         resources_set_int_sprintf("Drive%iTrueEmulation", has_tde[unr], unr + 8);
         unit->type = restore_type[unr];
+        if (has_tde[unr]) {
+            unit->clock_frequency = restored_clock[unr];
+            unit->idling_method = restored_idle[unr];
+            unit->parallel_cable = restored_cable[unr];
+            for (dnr = 0; dnr < has_drives[unr]; ++dnr) {
+                const drive_t *restored = &restored_drive[unr][dnr];
+
+                drive = unit->drives[dnr];
+                drive->byte_ready_level = restored->byte_ready_level;
+                drive->extend_image_policy = restored->extend_image_policy;
+                drive->GCR_head_offset = restored->GCR_head_offset;
+                drive->GCR_read = restored->GCR_read;
+                drive->GCR_write_value = restored->GCR_write_value;
+                drive->snap_accum = restored->snap_accum;
+                drive->snap_rotation_last_clk = restored->snap_rotation_last_clk;
+                drive->snap_bit_counter = restored->snap_bit_counter;
+                drive->snap_zero_count = restored->snap_zero_count;
+                drive->snap_last_read_data = restored->snap_last_read_data;
+                drive->snap_last_write_data = restored->snap_last_write_data;
+                drive->snap_seed = restored->snap_seed;
+                drive->snap_speed_zone = restored->snap_speed_zone;
+                drive->snap_ue7_dcba = restored->snap_ue7_dcba;
+                drive->snap_ue7_counter = restored->snap_ue7_counter;
+                drive->snap_uf4_counter = restored->snap_uf4_counter;
+                drive->snap_fr_randcount = restored->snap_fr_randcount;
+                drive->snap_filter_counter = restored->snap_filter_counter;
+                drive->snap_filter_state = restored->snap_filter_state;
+                drive->snap_filter_last_state = restored->snap_filter_last_state;
+                drive->snap_write_flux = restored->snap_write_flux;
+                drive->snap_PulseHeadPosition = restored->snap_PulseHeadPosition;
+                drive->snap_xorShift32 = restored->snap_xorShift32;
+                drive->snap_so_delay = restored->snap_so_delay;
+                drive->snap_cycle_index = restored->snap_cycle_index;
+                drive->snap_ref_advance = restored->snap_ref_advance;
+                drive->snap_req_ref_cycles = restored->snap_req_ref_cycles;
+                drive->byte_ready_edge = restored->byte_ready_edge;
+                drive->byte_ready_active = restored->byte_ready_active;
+            }
+        }
         if (has_tde[unr] && native_backend[unr] != 1 && native_backend[unr] != 2) {
             for (dnr = 0; dnr < has_drives[unr]; ++dnr) {
                 if (!(ieee_masks[unr] & (1U << dnr))) {
