@@ -549,16 +549,22 @@ static void wd1770_execute(wd1770_t *drv)
                             continue;
                         }
                         if (drv->byte_count <= (drv->dden ? 6 : (11 + 12)) + 2 + 9) {
-                            fdd_write(drv->fdd, 0);
+                            if (fdd_write(drv->fdd, 0) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             continue;
                         }
                         if (!drv->dden && drv->byte_count <= (11 + 12 + 2 + 9 + 3)) {
-                            fdd_write(drv->fdd, 0x1a1);
+                            if (fdd_write(drv->fdd, 0x1a1) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->crc = fdd_crc(drv->crc, 0xa1);
                             continue;
                         }
                         res = ((drv->cmd & WD_A) ? 0xf8 : 0xfb) | (drv->dden ? 0x100 : 0);
-                        fdd_write(drv->fdd, res);
+                        if (fdd_write(drv->fdd, res) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->crc = fdd_crc(drv->crc, res);
                         drv->byte_count = (128 << drv->tmp) + 3;
                         drv->step++;
@@ -570,18 +576,26 @@ static void wd1770_execute(wd1770_t *drv)
                         drv->clk += BYTE_RATE;
                         switch (--drv->byte_count) {
                             case 0:
-                                fdd_write(drv->fdd, 0xff);
+                                if (fdd_write(drv->fdd, 0xff) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 break;
                             case 1:
-                                fdd_write(drv->fdd, drv->crc & 0xff);
+                                if (fdd_write(drv->fdd, drv->crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 continue;
                             case 2:
-                                fdd_write(drv->fdd, drv->crc >> 8);
+                                if (fdd_write(drv->fdd, drv->crc >> 8) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 continue;
                             default:
                                 drv->status |= (drv->status & WD_DRQ) ? WD_LD : WD_DRQ;
                                 drv->crc = fdd_crc(drv->crc, drv->data);
-                                fdd_write(drv->fdd, drv->data);
+                                if (fdd_write(drv->fdd, drv->data) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 drv->data = 0;
                                 continue;
                         }
@@ -744,7 +758,9 @@ static void wd1770_execute(wd1770_t *drv)
                         drv->clk += BYTE_RATE;
                         res = drv->data;
                         if (drv->byte_count) {
-                            fdd_write(drv->fdd, drv->crc & 0xff);
+                            if (fdd_write(drv->fdd, drv->crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->byte_count--;
                         } else {
                             drv->status |= (drv->status & WD_DRQ) ? WD_LD : WD_DRQ;
@@ -791,7 +807,9 @@ static void wd1770_execute(wd1770_t *drv)
                             if (drv->tmp) {
                                 drv->crc = fdd_crc(drv->crc, res);
                             }
-                            fdd_write(drv->fdd, res);
+                            if (fdd_write(drv->fdd, res) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->data = 0;
                         }
                         continue;
@@ -815,6 +833,13 @@ static void wd1770_execute(wd1770_t *drv)
         drv->irq = 1;
         fdd_index_count_reset(drv->fdd);
     }
+
+scp_write_error:
+    drv->status = (drv->status & ~(WD_BSY | WD_DRQ)) | WD_WP;
+    drv->type = 0;
+    drv->cmd = 0;
+    drv->irq = 1;
+    fdd_index_count_reset(drv->fdd);
 }
 /*-----------------------------------------------------------------------*/
 /* WD1770 register read/write access.  */

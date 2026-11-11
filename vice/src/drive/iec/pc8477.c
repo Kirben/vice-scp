@@ -761,7 +761,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                             return PC8477_RESULT;
                         }
                         drv->write_crc = fdd_crc(drv->write_crc, drv->fifo[drv->fifop2]);
-                        fdd_write(drv->fdd, drv->fifo[drv->fifop2]);
+                        if (fdd_write(drv->fdd, drv->fifo[drv->fifop2]) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->fifop2++;
                         if (drv->fifop2 >= drv->fifo_size) {
@@ -775,12 +777,16 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 5:
-                        fdd_write(drv->fdd, drv->write_crc >> 8);
+                        if (fdd_write(drv->fdd, drv->write_crc >> 8) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->int_step++;
                         break;
                     case 6:
-                        fdd_write(drv->fdd, drv->write_crc & 0xff);
+                        if (fdd_write(drv->fdd, drv->write_crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         if (drv->cmd[6] != drv->sector) {
                             drv->sector++;
@@ -819,7 +825,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->byte_count = 80;
                         break;
                     case 2:
-                        fdd_write(drv->fdd, 0x4e);
+                        if (fdd_write(drv->fdd, 0x4e) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -829,7 +837,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 3:
-                        fdd_write(drv->fdd, 0x00);
+                        if (fdd_write(drv->fdd, 0x00) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -839,7 +849,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 4:
-                        fdd_write(drv->fdd, 0x1a1);
+                        if (fdd_write(drv->fdd, 0x1a1) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -848,13 +860,17 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 5:
-                        fdd_write(drv->fdd, 0xfc);
+                        if (fdd_write(drv->fdd, 0xfc) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count = 50;
                         drv->int_step++;
                         break;
                     case 6:
-                        fdd_write(drv->fdd, 0x4e);
+                        if (fdd_write(drv->fdd, 0x4e) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -864,7 +880,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 7:
-                        fdd_write(drv->fdd, 0x00);
+                        if (fdd_write(drv->fdd, 0x00) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -874,7 +892,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 8:
-                        fdd_write(drv->fdd, 0x1a1);
+                        if (fdd_write(drv->fdd, 0x1a1) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -884,7 +904,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         break;
                     case 9:
                         drv->write_crc = pc8477_record_crc(0xfe);
-                        fdd_write(drv->fdd, 0xfe);
+                        if (fdd_write(drv->fdd, 0xfe) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count = 4;
                         drv->int_step++;
@@ -897,7 +919,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                             return PC8477_RESULT;
                         }
                         drv->write_crc = fdd_crc(drv->write_crc, drv->fifo[drv->fifop2]);
-                        fdd_write(drv->fdd, drv->fifo[drv->fifop2]);
+                        if (fdd_write(drv->fdd, drv->fifo[drv->fifop2]) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->fifop2++;
                         if (drv->fifop2 >= drv->fifo_size) {
@@ -911,18 +935,24 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 11:
-                        fdd_write(drv->fdd, drv->write_crc >> 8);
+                        if (fdd_write(drv->fdd, drv->write_crc >> 8) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->int_step++;
                         break;
                     case 12:
-                        fdd_write(drv->fdd, drv->write_crc & 0xff);
+                        if (fdd_write(drv->fdd, drv->write_crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count = (drv->rate == 1000 && drv->current->perpendicular) ? 41 : 22;
                         drv->int_step++;
                         break;
                     case 13:
-                        fdd_write(drv->fdd, 0x4e);
+                        if (fdd_write(drv->fdd, 0x4e) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -932,7 +962,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 14:
-                        fdd_write(drv->fdd, 0x00);
+                        if (fdd_write(drv->fdd, 0x00) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -942,7 +974,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 15:
-                        fdd_write(drv->fdd, 0x1a1);
+                        if (fdd_write(drv->fdd, 0x1a1) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -952,14 +986,18 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         break;
                     case 16:
                         drv->write_crc = pc8477_record_crc(0xfb);
-                        fdd_write(drv->fdd, 0xfb);
+                        if (fdd_write(drv->fdd, 0xfb) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count = 128 << drv->cmd[2];
                         drv->int_step++;
                         break;
                     case 17:
                         drv->write_crc = fdd_crc(drv->write_crc, drv->cmd[5]);
-                        fdd_write(drv->fdd, drv->cmd[5]);
+                        if (fdd_write(drv->fdd, drv->cmd[5]) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count--;
                         if (drv->byte_count) {
@@ -968,12 +1006,16 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 18:
-                        fdd_write(drv->fdd, drv->write_crc >> 8);
+                        if (fdd_write(drv->fdd, drv->write_crc >> 8) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->int_step++;
                         break;
                     case 19:
-                        fdd_write(drv->fdd, drv->write_crc & 0xff);
+                        if (fdd_write(drv->fdd, drv->write_crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         drv->byte_count = drv->cmd[4];
                         drv->sector++;
@@ -984,7 +1026,9 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
                         drv->int_step++;
                         break;
                     case 20:
-                        fdd_write(drv->fdd, 0x4e);
+                        if (fdd_write(drv->fdd, 0x4e) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->clk += BYTE_RATE;
                         break;
                 }
@@ -1003,6 +1047,11 @@ static pc8477_state_t pc8477_execute(pc8477_t *drv)
     drv->command = PC8477_CMD_INVALID;
     drv->st[0] = drv->st[3] | 0x80; /* invalid command */
     drv->res_size = 1;
+    return PC8477_RESULT;
+
+scp_write_error:
+    drv->st[1] |= PC8477_ST1_NW;
+    drv->st[0] |= 0x40;
     return PC8477_RESULT;
 }
 

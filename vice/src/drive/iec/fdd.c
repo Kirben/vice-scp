@@ -709,19 +709,27 @@ int fdd_write(fd_drive_t *drv, uint16_t data)
 {
     int p;
 
-    if (!drv || !drv->motor || !drv->image
-        || (drv->image->type == DISK_IMAGE_TYPE_SCP && fdd_write_protect(drv))) {
+    int scp;
+
+    if (!drv || !drv->motor || !drv->image) {
         return -1;
     }
+    scp = drv->image->type == DISK_IMAGE_TYPE_SCP;
+    if (scp && fdd_write_protect(drv)) {
+        return FDD_SCP_WRITE_ERROR;
+    }
     fdd_update_raw(drv);
+    if (scp && drv->write_protect) {
+        return FDD_SCP_WRITE_ERROR;
+    }
 
     p = drv->raw.head;
     if (drv->disk_rate == drv->rate) {
-        if (drv->image->type == DISK_IMAGE_TYPE_SCP) {
+        if (scp) {
             if (drv->raw.dirty && p != drv->raw.first_written + drv->raw.written) {
                 fdd_flush_raw(drv);
                 if (drv->write_protect) {
-                    return -1;
+                    return FDD_SCP_WRITE_ERROR;
                 }
             }
             if (!drv->raw.dirty) {
@@ -744,7 +752,7 @@ int fdd_write(fd_drive_t *drv, uint16_t data)
         fdd_count_turns(drv, 1);
     }
     drv->raw.head = p;
-    return 0;
+    return scp && drv->write_protect ? FDD_SCP_WRITE_ERROR : 0;
 }
 
 void fdd_flush(fd_drive_t *drv)

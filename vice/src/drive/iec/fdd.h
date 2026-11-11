@@ -41,6 +41,8 @@ void fdd_shutdown(fd_drive_t *drv);
 void fdd_image_attach(fd_drive_t *drv, struct disk_image_s *image);
 void fdd_image_detach(fd_drive_t *drv);
 uint16_t fdd_read(fd_drive_t *drv);
+/* Preserve the legacy error return for non-SCP callers. */
+#define FDD_SCP_WRITE_ERROR (-2)
 int fdd_write(fd_drive_t *drv, uint16_t data);
 void fdd_flush(fd_drive_t *drv);
 void fdd_seek_pulse(fd_drive_t *drv, int dir);
