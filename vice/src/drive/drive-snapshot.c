@@ -83,9 +83,9 @@ static int drive_snapshot_write_gcrimage_module(snapshot_t *s,
                                                 unsigned int dnr);
 static int drive_snapshot_write_p64image_module(snapshot_t *s,
                                                 unsigned int dnr);
-static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr);
-static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr);
-static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr);
+static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr, int validate_only);
+static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr, int validate_only);
+static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr, int validate_only);
 
 /*
     DRIVE 2.0 snapshot module format:
@@ -545,6 +545,8 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
     return s;
 }
 
+static int snapshot_changes_scp(snapshot_t *s);
+
 static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS],
                                flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES],
                                int (*read_machine_modules)(snapshot_t *, int), int event_mode)
@@ -860,6 +862,17 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
     }
 
+    if (snapshot_changes_scp(s)) {
+        for (unr = 0; unr < NUM_DISK_UNITS; ++unr) {
+            if (has_tde[unr] && !native_backend[unr]
+                && (drive_snapshot_read_image_module(s, unr, 1) < 0
+                    || drive_snapshot_read_gcrimage_module(s, unr, 1) < 0
+                    || drive_snapshot_read_p64image_module(s, unr, 1) < 0)) {
+                return -1;
+            }
+        }
+    }
+
     if (read_machine_modules) {
         /* The VIC-II reader needs the saved video standard. Apply it before
            reading the remaining machine modules, with the old disks mounted. */
@@ -1006,9 +1019,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                                                  native_side[unr], native_read_only[unr], 0) < 0) {
                         return -1;
                     }
-                } else if (drive_snapshot_read_image_module(s, unr) < 0
-                    || drive_snapshot_read_gcrimage_module(s, unr) < 0
-                    || drive_snapshot_read_p64image_module(s, unr) < 0) {
+                } else if (drive_snapshot_read_image_module(s, unr, 0) < 0
+                    || drive_snapshot_read_gcrimage_module(s, unr, 0) < 0
+                    || drive_snapshot_read_p64image_module(s, unr, 0) < 0) {
                     return -1;
                 }
             }
@@ -1234,7 +1247,7 @@ static int drive_snapshot_write_image_module(snapshot_t *s, unsigned int dnr)
     return 0;
 }
 
-static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr)
+static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr, int validate_only)
 {
     uint8_t major_version, minor_version;
     snapshot_module_t *m;
@@ -1258,8 +1271,9 @@ static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr)
                              &major_version, &minor_version);
     if (m != NULL) {
         /* do not detach an existing DHD image as they aren't saved in the snapshot */
-        if ((diskunit_context[dnr]->type != DRIVE_TYPE_CMDHD && detach_snapshot_disk(dnr + 8, 0) < 0)
-            || detach_snapshot_disk(dnr + 8, 1) < 0) {
+        if (!validate_only
+            && ((diskunit_context[dnr]->type != DRIVE_TYPE_CMDHD && detach_snapshot_disk(dnr + 8, 0) < 0)
+                || detach_snapshot_disk(dnr + 8, 1) < 0)) {
             snapshot_module_close(m);
             return -1;
         }
@@ -1305,6 +1319,11 @@ static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr)
             len = D82_FILE_SIZE;
             break;
         case 9000:
+            if (!drive->image || drive->image->type == DISK_IMAGE_TYPE_SCP) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                snapshot_module_close(m);
+                return -1;
+            }
             len = drive->image->tracks * drive->image->sectors * 256;
             break;
         default:
@@ -1313,6 +1332,11 @@ static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr)
                       (int)word);
             snapshot_module_close(m);
             return -1;
+    }
+
+    if (validate_only) {
+        rc = snapshot_module_skip_bytes(m, len);
+        return snapshot_module_close(m) < 0 || rc < 0 ? -1 : 0;
     }
 
     /* create temporary file of the right size */
@@ -1425,7 +1449,7 @@ static int drive_snapshot_write_gcrimage_module(snapshot_t *s, unsigned int dnr)
     return 0;
 }
 
-static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr)
+static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr, int validate_only)
 {
     uint8_t major_version, minor_version;
     snapshot_module_t *m;
@@ -1472,6 +1496,14 @@ static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr)
             return -1;
         }
 
+        if (validate_only) {
+            if (snapshot_module_skip_bytes(m, track_size) < 0) {
+                snapshot_module_close(m);
+                return -1;
+            }
+            continue;
+        }
+
         if (track_size) {
             if (drive->gcr->tracks[i].data == NULL) {
                 drive->gcr->tracks[i].data = lib_calloc(1, track_size);
@@ -1492,6 +1524,9 @@ static int drive_snapshot_read_gcrimage_module(snapshot_t *s, unsigned int dnr)
             snapshot_module_close(m);
             return -1;
         }
+    }
+    if (validate_only) {
+        return snapshot_module_close(m);
     }
     for (; i < MAX_GCR_TRACKS; i++) {
         if (drive->gcr->tracks[i].data) {
@@ -1566,7 +1601,7 @@ static int drive_snapshot_write_p64image_module(snapshot_t *s, unsigned int dnr)
     return 0;
 }
 
-static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr)
+static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr, int validate_only)
 {
     uint8_t major_version, minor_version;
     snapshot_module_t *m;
@@ -1575,6 +1610,8 @@ static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr)
     drive_t *drive;
     TP64MemoryStream P64MemoryStreamInstance;
     PP64Image P64Image;
+    TP64Image *scratch = NULL;
+    int parsed;
     uint32_t size;
 
     drive = diskunit_context[dnr]->drives[0];
@@ -1588,7 +1625,7 @@ static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr)
 
     P64Image = (void*)drive->p64;
 
-    if (P64Image == NULL) {
+    if (!validate_only && P64Image == NULL) {
         if (m != NULL) {
             snapshot_module_close(m);
         }
@@ -1630,7 +1667,17 @@ static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr)
     P64MemoryStreamClear(&P64MemoryStreamInstance);
     P64MemoryStreamWrite(&P64MemoryStreamInstance, tmpbuf, size);
     P64MemoryStreamSeek(&P64MemoryStreamInstance, 0);
-    if (!P64ImageReadFromStream(P64Image, &P64MemoryStreamInstance)) {
+    if (validate_only) {
+        scratch = lib_malloc(sizeof(*scratch));
+        P64ImageCreate(scratch);
+        P64Image = scratch;
+    }
+    parsed = P64ImageReadFromStream(P64Image, &P64MemoryStreamInstance);
+    if (scratch) {
+        P64ImageDestroy(scratch);
+        lib_free(scratch);
+    }
+    if (!parsed) {
         if (m != NULL) {
             snapshot_module_close(m);
         }
@@ -1641,10 +1688,13 @@ static int drive_snapshot_read_p64image_module(snapshot_t *s, unsigned int dnr)
 
     P64MemoryStreamDestroy(&P64MemoryStreamInstance);
 
-    snapshot_module_close(m);
-    m = NULL;
-
     lib_free(tmpbuf);
+    if (snapshot_module_close(m) < 0) {
+        return -1;
+    }
+    if (validate_only) {
+        return 0;
+    }
 
     drive->P64_image_loaded = 1;
     drive->complicated_image_loaded = 1;
