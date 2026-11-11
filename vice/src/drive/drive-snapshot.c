@@ -240,46 +240,49 @@ static int snapshot_embeds_flux(snapshot_t *s, unsigned int unit, unsigned int b
     return snapshot_module_close(m) == 0 && matches;
 }
 
-static int restore_ieee_flux(snapshot_t *s, diskunit_context_t *unit,
-                               unsigned int address, unsigned int mask, int embed)
+static int read_ieee_flux(snapshot_t *s, const diskunit_context_t *unit,
+                         unsigned int address, unsigned int mask, int embed,
+                         const int read_only[NUM_DRIVES], flux_capture_t *captures[NUM_DRIVES])
 {
-    flux_capture_t *captures[NUM_DRIVES] = {NULL};
     unsigned int number;
-    unsigned int count = drive_check_dual(unit->type) ? NUM_DRIVES : 1;
-    int rc = -1;
 
-    /* Validate both captures before replacing either attachment. */
-    for (number = 0; number < count; number++) {
+    for (number = 0; number < NUM_DRIVES; number++) {
         if (mask & (1U << number)) {
-            if (drive_sector_flux_snapshot_read(s, unit->drives[number], address,
-                                                  number, 0, embed, unit->drives[number]->read_only, &captures[number]) < 0) {
-                goto done;
+            if ((unsigned int)read_only[number] > 1
+                || drive_sector_flux_snapshot_read(s, unit->drives[number], address,
+                    number, 0, embed, read_only[number], &captures[number]) < 0) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+                return -1;
             }
         } else if (native_flux_module_present(s, address, number) != 0) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
-            goto done;
+            return -1;
         }
     }
+    return 0;
+}
+
+static int restore_ieee_flux(diskunit_context_t *unit, unsigned int address,
+                            unsigned int mask, int embed, const int read_only[NUM_DRIVES],
+                            flux_capture_t *captures[NUM_DRIVES])
+{
+    unsigned int number;
+    unsigned int count = drive_check_dual(unit->type) ? NUM_DRIVES : 1;
+
     for (number = 0; number < count; number++) {
         if (captures[number]) {
             if (file_system_attach_flux_capture(address, number, captures[number],
-                                                unit->drives[number]->read_only, flux_capture_uses_360_clock(captures[number])) < 0) {
-                goto done;
+                    read_only[number], flux_capture_uses_360_clock(captures[number])) < 0) {
+                return -1;
             }
             captures[number] = NULL;
         } else if (!(mask & (1U << number))
                    && (embed || disk_image_flux_capture_get(unit->drives[number]->image))
                    && detach_snapshot_disk(address, number) < 0) {
-            goto done;
+            return -1;
         }
     }
-    rc = 0;
-
-done:
-    for (number = 0; number < count; number++) {
-        flux_capture_destroy(captures[number]);
-    }
-    return rc;
+    return 0;
 }
 
 int drive_snapshot_write_module(snapshot_t *s, int save_disks, int save_roms)
@@ -543,6 +546,7 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
 }
 
 static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_DISK_UNITS],
+                               flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES],
                                int (*read_machine_modules)(snapshot_t *, int), int event_mode)
 {
     uint8_t major_version, minor_version;
@@ -742,6 +746,11 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         }
         snapshot_module_close(m);
         m = NULL;
+        if (minor_version == 3
+            && read_ieee_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr],
+                              restore_read_only[unr], ieee_captures[unr]) < 0) {
+            return -1;
+        }
         if (minor_version == 3 && drive_check_old(restored_type)
             && fdc_snapshot_validate_module(s, unr, has_drives[unr]) < 0) {
             return -1;
@@ -877,7 +886,9 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         unit->type = restore_type[unr];
         if (has_tde[unr] && native_backend[unr] != 1 && native_backend[unr] != 2) {
             for (dnr = 0; dnr < has_drives[unr]; ++dnr) {
-                unit->drives[dnr]->read_only = restore_read_only[unr][dnr];
+                if (!(ieee_masks[unr] & (1U << dnr))) {
+                    unit->drives[dnr]->read_only = restore_read_only[unr][dnr];
+                }
             }
         }
     }
@@ -967,7 +978,8 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                     }
                 }
                 if (native_backend[unr] == 3
-                    && restore_ieee_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr]) < 0) {
+                    && restore_ieee_flux(unit, unr + 8, ieee_masks[unr], ieee_embed[unr],
+                                         restore_read_only[unr], ieee_captures[unr]) < 0) {
                     return -1;
                 }
                 if (machine_drive_snapshot_read(diskunit_context[unr], s) < 0) {
@@ -1125,13 +1137,17 @@ int drive_snapshot_read_with_machine_modules(snapshot_t *s,
     int (*read_machine_modules)(snapshot_t *, int), int event_mode)
 {
     flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
+    flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES] = {{NULL}};
     int preserve_scp = read_machine_modules && snapshot_changes_scp(s);
-    int result = read_drive_snapshot(s, mfm_captures,
+    int result = read_drive_snapshot(s, mfm_captures, ieee_captures,
                                      preserve_scp ? read_machine_modules : NULL, event_mode);
-    unsigned int unit;
+    unsigned int unit, drive;
 
     for (unit = 0; unit < NUM_DISK_UNITS; ++unit) {
         flux_capture_destroy(mfm_captures[unit]);
+        for (drive = 0; drive < NUM_DRIVES; ++drive) {
+            flux_capture_destroy(ieee_captures[unit][drive]);
+        }
     }
     if (result == 0 && read_machine_modules && !preserve_scp) {
         result = read_machine_modules(s, event_mode);
