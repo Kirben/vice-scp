@@ -264,11 +264,12 @@ int drive_flux_snapshot_write(snapshot_t *s, drive_t *drive,
     int writable;
     int is_1571;
     if (!input || input->fault || !drive->image
-        || drive->read_only != drive->image->read_only
+        || (drive->image->read_only && !drive->read_only)
+        || (drive->read_only && input->writing)
         || !flux_capture_is_sealed(input->playback.capture)) {
         return -1;
     }
-    writable = !drive->read_only;
+    writable = !drive->image->read_only;
     is_1571 = has_1571_clock_switch(drive->diskunit->type);
     state = &input->playback.state;
     rate_state = flux_capture_uses_360_clock(input->playback.capture);
@@ -329,6 +330,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     uint8_t phase;
     uint8_t speed = 5;
     uint8_t source_phase = 0;
+    int read_only = drive->read_only;
     uint8_t expected[20];
     uint8_t actual[20];
     uint8_t alignment = 0;
@@ -372,14 +374,14 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     state.inclusive = inclusive;
     writable = minor == 3 || minor == 5;
     if (drive_flux_snapshot_validate(drive, halftrack) < 0
-        || drive->read_only == writable
+        || (!writable && !read_only)
         || (minor >= 4) != has_1571_clock_switch(drive->diskunit->type)
         || rotation_flux_track(halftrack, side, alignment) != ht
         || motor != !!(drive->byte_ready_active & BRA_MOTOR_ON)) {
         goto done;
     }
     if (writable) {
-        if (SMR_B(m, &writing) < 0 || writing > 1) {
+        if (SMR_B(m, &writing) < 0 || writing > 1 || (writing && read_only)) {
             goto done;
         }
         restored.writing = writing;
@@ -410,7 +412,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
         capture = owned;
     } else {
         if (!drive->flux || !drive->image
-            || drive->image->read_only != drive->read_only) {
+            || drive->image->read_only == writable) {
             goto done;
         }
         capture = drive->flux->playback.capture;
@@ -453,6 +455,7 @@ int drive_flux_snapshot_read(snapshot_t *s, drive_t *drive,
     }
     lib_free(drive->flux->write_pulses);
     *drive->flux = restored;
+    drive->read_only = read_only;
     restored.write_pulses = NULL;
     rc = 0;
 done:
