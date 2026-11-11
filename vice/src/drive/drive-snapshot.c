@@ -60,6 +60,7 @@
 #include "log.h"
 #include "machine-bus.h"
 #include "machine-drive.h"
+#include "machine.h"
 #include "resources.h"
 #include "riot.h"
 #include "rotation.h"
@@ -610,6 +611,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     CLOCK detach_clk[NUM_DISK_UNITS];
     CLOCK attach_detach_clk[NUM_DISK_UNITS];
     int sync_factor;
+    unsigned int available_busses = iec_available_busses();
     int has_saved_sync_factor = 0;
     drive_t *drive;
     diskunit_context_t *unit;
@@ -627,6 +629,11 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     int restore_read_only[NUM_DISK_UNITS][NUM_DRIVES];
     uint8_t ieee_masks[NUM_DISK_UNITS] = {0};
     uint8_t ieee_embed[NUM_DISK_UNITS] = {0};
+
+    /* VIC-20 snapshots restore the optional IEEE interface after the drive modules. */
+    if (machine_class == VICE_MACHINE_VIC20) {
+        available_busses |= IEC_BUS_IEEE;
+    }
 
     drive_gcr_data_writeback_all();
 
@@ -766,7 +773,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 }
             }
         }
-        if (has_tde[unr] && !drive_check_bus(restored_type, IEC_BUS_IEC | IEC_BUS_IEEE | IEC_BUS_TCBM)) {
+        if (has_tde[unr] && !drive_check_bus(restored_type, available_busses)) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
             snapshot_module_close(m);
             return -1;
