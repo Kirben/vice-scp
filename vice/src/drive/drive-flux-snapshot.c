@@ -507,7 +507,7 @@ int drive_sector_flux_snapshot_write(snapshot_t *s, const drive_t *drive,
 
 int drive_sector_flux_snapshot_read(snapshot_t *s, const drive_t *drive,
                                      unsigned int unit, unsigned int number, int mfm,
-                                     int expected_embed, flux_capture_t **embedded)
+                                     int expected_embed, int read_only, flux_capture_t **embedded)
 {
     char name[16];
     uint8_t major;
@@ -525,7 +525,7 @@ int drive_sector_flux_snapshot_read(snapshot_t *s, const drive_t *drive,
     if (!m) {
         goto fail;
     }
-    if (major != (mfm ? 2 : 3) || minor != (unsigned int)!drive->read_only
+    if (major != (mfm ? 2 : 3) || minor != (unsigned int)!read_only
         || SMR_B(m, &embed) < 0 || embed > 1
         || (expected_embed >= 0 && embed != expected_embed)
         || SMR_BA(m, expected, sizeof(expected)) < 0) {
@@ -536,7 +536,7 @@ int drive_sector_flux_snapshot_read(snapshot_t *s, const drive_t *drive,
         capture = owned;
     } else {
         capture = disk_image_flux_capture_get(drive->image);
-        if (!drive->image || drive->image->read_only != drive->read_only) {
+        if (!drive->image || drive->image->read_only != read_only) {
             goto fail;
         }
     }

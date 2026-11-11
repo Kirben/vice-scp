@@ -237,18 +237,21 @@ static int snapshot_embeds_flux(snapshot_t *s, unsigned int unit, unsigned int b
 }
 
 static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
-                                 unsigned int address, unsigned int mask, int embed, int mfm)
+                                 unsigned int address, unsigned int mask, int embed, int mfm,
+                                 int mfm_read_only)
 {
     flux_capture_t *captures[NUM_DRIVES] = {NULL};
+    int read_only[NUM_DRIVES];
     unsigned int number;
     unsigned int count = !mfm && drive_check_dual(unit->type) ? NUM_DRIVES : 1;
     int rc = -1;
 
     /* Validate both captures before replacing either attachment. */
     for (number = 0; number < count; number++) {
+        read_only[number] = mfm ? mfm_read_only : unit->drives[number]->read_only;
         if (mask & (1U << number)) {
             if (drive_sector_flux_snapshot_read(s, unit->drives[number], address,
-                                                  number, mfm, embed, &captures[number]) < 0) {
+                                                  number, mfm, embed, read_only[number], &captures[number]) < 0) {
                 goto done;
             }
         } else if (native_flux_module_present(s, address, number) != 0) {
@@ -259,10 +262,12 @@ static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
     for (number = 0; number < count; number++) {
         if (captures[number]) {
             if (file_system_attach_flux_capture(address, number, captures[number],
-                                                unit->drives[number]->read_only, flux_capture_uses_360_clock(captures[number])) < 0) {
+                                                read_only[number], flux_capture_uses_360_clock(captures[number])) < 0) {
                 goto done;
             }
             captures[number] = NULL;
+        } else if (mfm && (mask & (1U << number))) {
+            unit->drives[number]->read_only = read_only[number];
         } else if (!(mask & (1U << number))
                    && (embed || disk_image_flux_capture_get(unit->drives[number]->image))
                    && detach_snapshot_disk(address, number) < 0) {
@@ -751,7 +756,7 @@ int drive_snapshot_read_module(snapshot_t *s)
                 }
             }
             unit->type = restored_type;
-            drive->read_only = restored_read_only;
+            native_read_only[unr] = restored_read_only;
         }
         if (minor_version == 0 && (native_flux_module_present(s, unr + 8, 0) != 0
                 || native_flux_module_present(s, unr + 8, 1) != 0)) {
@@ -834,11 +839,11 @@ int drive_snapshot_read_module(snapshot_t *s)
                 }
                 /* Mount media before restoring controller position and disk-change state. */
                 if (native_backend[unr] == 2
-                    && restore_sector_flux(s, unit, unr + 8, 1, -1, 1) < 0) {
+                    && restore_sector_flux(s, unit, unr + 8, 1, -1, 1, native_read_only[unr]) < 0) {
                     return -1;
                 }
                 if (native_backend[unr] == 3
-                    && restore_sector_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr], 0) < 0) {
+                    && restore_sector_flux(s, unit, unr + 8, ieee_masks[unr], ieee_embed[unr], 0, 0) < 0) {
                     return -1;
                 }
                 if (machine_drive_snapshot_read(diskunit_context[unr], s) < 0) {

@@ -13,5 +13,5 @@ int drive_sector_flux_snapshot_write(struct snapshot_s *s, const struct drive_s 
                                       unsigned int unit, unsigned int number, int embed, int mfm);
 int drive_sector_flux_snapshot_read(struct snapshot_s *s, const struct drive_s *drive,
                                      unsigned int unit, unsigned int number, int mfm,
-                                     int expected_embed, struct flux_capture_s **embedded);
+                                     int expected_embed, int read_only, struct flux_capture_s **embedded);
 #endif
