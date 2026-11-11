@@ -64,6 +64,8 @@ Detach the disk or exit normally to publish changes. If publication
 cannot proceed safely, VICE retains the backing file and reports the
 recovery image path when one can be created. Gzip images are recompressed
 before replacement. A recovery image from a gzip mount is a plain SCP.
+VICE keeps a small .vice-lock file beside each SCP it publishes. Leave
+it in place while any VICE instance might be saving to that image.
 
 Snapshots
 ---------

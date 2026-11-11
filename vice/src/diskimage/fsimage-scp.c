@@ -18,10 +18,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <string.h>
 #include <unistd.h>
 #include <zlib.h>
 #ifdef WINDOWS_COMPILE
+#include <io.h>
 #include <windows.h>
 #endif
 
@@ -504,6 +506,56 @@ static int gzip_stage(const char *raw_path, FILE *stage, uint8_t identity[20])
     return result ? result : file_identity(stage, identity);
 }
 
+/* Keep the sidecar in place so all publishers lock the same file, even
+   when the SCP itself is replaced. Closing the descriptor releases the lock. */
+static int lock_scp_publish(const char *path)
+{
+#ifdef WINDOWS_COMPILE
+    char resolved[_MAX_PATH];
+#else
+    char resolved[PATH_MAX];
+#endif
+    char *name;
+    int fd;
+
+    if (archdep_real_path(path, resolved) == NULL) {
+        return -1;
+    }
+    name = lib_msprintf("%s.vice-lock", resolved);
+    fd = open(name, O_RDWR | O_CREAT, 0600);
+    lib_free(name);
+    if (fd < 0) {
+        return -1;
+    }
+#ifdef WINDOWS_COMPILE
+    {
+        OVERLAPPED offset = {0};
+
+        if (!LockFileEx((HANDLE)_get_osfhandle(fd), LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &offset)) {
+            close(fd);
+            return -1;
+        }
+    }
+#else
+    {
+        struct flock lock = {0};
+        int result;
+
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_len = 1;
+        do {
+            result = fcntl(fd, F_SETLKW, &lock);
+        } while (result < 0 && errno == EINTR);
+        if (result < 0) {
+            close(fd);
+            return -1;
+        }
+    }
+#endif
+    return fd;
+}
+
 int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
 {
     fsimage_t *fs = image->media.fsimage;
@@ -517,6 +569,7 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
     int same_directory;
     int result;
     int layout_ok = 1;
+    int publish_lock = -1;
 
     if (recovery_path != NULL) {
         *recovery_path = NULL;
@@ -577,6 +630,9 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
         }
     }
     if (same_directory && !fs->flux_write_failed && layout_ok) {
+        publish_lock = lock_scp_publish(fs->name);
+    }
+    if (publish_lock >= 0) {
         const char *publish = compressed ? compressed : stage;
         original = fopen(fs->name, "r+b");
         if (original != NULL) {
@@ -592,6 +648,7 @@ int fsimage_scp_flush(disk_image_t *image, char **recovery_path)
 #endif
             }
         }
+        close(publish_lock);
     }
 
     if (compressed) {
