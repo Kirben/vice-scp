@@ -59,6 +59,7 @@ int file_system_attach_disk(unsigned int unit, unsigned int drive, const char *f
 int file_system_attach_flux_capture(unsigned int unit, unsigned int drive,
                                      struct flux_capture_s *capture, int read_only, int scaled);
 void file_system_detach_disk(unsigned int unit, unsigned int drive);
+int file_system_detach_disk_checked(unsigned int unit, unsigned int drive);
 void file_system_detach_disk_all(void);
 void file_system_detach_disk_shutdown(void);
 struct vdrive_s *file_system_get_vdrive(unsigned int unit);

@@ -205,6 +205,19 @@ static unsigned int ieee_scp_mask(const diskunit_context_t *unit)
     return mask;
 }
 
+static int detach_snapshot_disk(unsigned int unit, unsigned int drive)
+{
+    const disk_image_t *image = file_system_get_image(unit, drive);
+
+    if (!image || image->type != DISK_IMAGE_TYPE_SCP) {
+        file_system_detach_disk(unit, drive);
+    } else if (file_system_detach_disk_checked(unit, drive) < 0) {
+        snapshot_set_error(SNAPSHOT_CANNOT_READ_SNAPSHOT);
+        return -1;
+    }
+    return 0;
+}
+
 static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
                                  unsigned int address, unsigned int mask, int embed, int mfm)
 {
@@ -233,8 +246,9 @@ static int restore_sector_flux(snapshot_t *s, diskunit_context_t *unit,
             }
             captures[number] = NULL;
         } else if (!(mask & (1U << number))
-                   && (embed || disk_image_flux_capture_get(unit->drives[number]->image))) {
-            file_system_detach_disk(address, number);
+                   && (embed || disk_image_flux_capture_get(unit->drives[number]->image))
+                   && detach_snapshot_disk(address, number) < 0) {
+            goto done;
         }
     }
     rc = 0;
@@ -500,8 +514,11 @@ int drive_snapshot_read_module(snapshot_t *s)
         if (m == NULL || minor_version != 3) {
             unsigned int mask = ieee_scp_mask(unit);
             for (dnr = 0; dnr < NUM_DRIVES; dnr++) {
-                if (mask & (1U << dnr)) {
-                    file_system_detach_disk(unr + 8, dnr);
+                if ((mask & (1U << dnr)) && detach_snapshot_disk(unr + 8, dnr) < 0) {
+                    if (m != NULL) {
+                        snapshot_module_close(m);
+                    }
+                    return -1;
                 }
             }
         }
@@ -513,11 +530,8 @@ int drive_snapshot_read_module(snapshot_t *s)
             }
             /* If this module is not found true emulation is off.  */
             /*resources_set_int("DriveTrueEmulation", 0);*/
-            if (flux_backend(unit->drives[0])) {
-                file_system_detach_disk(unr + 8, 0);
-                if (flux_backend(unit->drives[0])) {
-                    return -1;
-                }
+            if (flux_backend(unit->drives[0]) && detach_snapshot_disk(unr + 8, 0) < 0) {
+                return -1;
             }
             resources_set_int_sprintf("Drive%iTrueEmulation", 0, unr + 8);
             has_tde[unr] = 0;
@@ -539,12 +553,10 @@ int drive_snapshot_read_module(snapshot_t *s)
         }
 
         /* Legacy snapshots cannot leave a current native backend active. */
-        if (flux_backend(unit->drives[0]) && flux_backend(unit->drives[0]) != minor_version) {
-            file_system_detach_disk(unr + 8, 0);
-            if (flux_backend(unit->drives[0])) {
-                snapshot_module_close(m);
-                return -1;
-            }
+        if (flux_backend(unit->drives[0]) && flux_backend(unit->drives[0]) != minor_version
+            && detach_snapshot_disk(unr + 8, 0) < 0) {
+            snapshot_module_close(m);
+            return -1;
         }
 
         if (0
@@ -959,10 +971,11 @@ static int drive_snapshot_read_image_module(snapshot_t *s, unsigned int dnr)
                              &major_version, &minor_version);
     if (m != NULL) {
         /* do not detach an existing DHD image as they aren't saved in the snapshot */
-        if (diskunit_context[dnr]->type != DRIVE_TYPE_CMDHD) {
-            file_system_detach_disk(dnr + 8, 0);
+        if ((diskunit_context[dnr]->type != DRIVE_TYPE_CMDHD && detach_snapshot_disk(dnr + 8, 0) < 0)
+            || detach_snapshot_disk(dnr + 8, 1) < 0) {
+            snapshot_module_close(m);
+            return -1;
         }
-        file_system_detach_disk(dnr + 8, 1);
         snapshot_module_close(m);
         return 0;
     }

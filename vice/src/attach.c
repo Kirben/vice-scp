@@ -1042,17 +1042,18 @@ static int file_system_detach_disk_single(unsigned int unit, unsigned int drive)
     return 0;
 }
 
-static void file_system_detach_disk_internal(unsigned int unit, unsigned int drive)
+static int file_system_detach_disk_internal(unsigned int unit, unsigned int drive)
 {
     char event_data[2];
 
     if ((unit >= 8) && (unit < 8 + NUM_DISK_UNITS)) {
         if (file_system_detach_disk_single(unit, drive) < 0) {
-            return;
+            return -1;
         }
         file_system_set_serial_hooks(unit, ATTACH_DEVICE_FS);
     } else {
         log_error(attach_log, "Cannot detach unit %u drive %u.", unit, drive);
+        return -1;
     }
 
     /* TODO: drive 1 for EVENT_ATTACHDISK */
@@ -1060,14 +1061,15 @@ static void file_system_detach_disk_internal(unsigned int unit, unsigned int dri
     event_data[1] = 0;
 
     event_record(EVENT_ATTACHDISK, (void *)event_data, 2);
+    return 0;
 }
 
-void file_system_detach_disk(unsigned int unit, unsigned int drive)
+int file_system_detach_disk_checked(unsigned int unit, unsigned int drive)
 {
     char event_data[2];
 
     if (event_playback_active()) {
-        return;
+        return -1;
     }
 
     event_data[0] = (char)unit;
@@ -1075,10 +1077,15 @@ void file_system_detach_disk(unsigned int unit, unsigned int drive)
 
     if (network_connected()) {
         network_event_record(EVENT_ATTACHDISK, (void *)event_data, 2);
-        return;
+        return -1;
     }
 
-    file_system_detach_disk_internal(unit, drive);
+    return file_system_detach_disk_internal(unit, drive);
+}
+
+void file_system_detach_disk(unsigned int unit, unsigned int drive)
+{
+    file_system_detach_disk_checked(unit, drive);
 }
 
 void file_system_detach_disk_all(void)
