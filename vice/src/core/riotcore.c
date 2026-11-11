@@ -436,7 +436,7 @@ int riotcore_snapshot_write_module(riot_context_t *riot_context, snapshot_t *p)
     return snapshot_module_close(m);
 }
 
-int riotcore_snapshot_read_module(riot_context_t *riot_context, snapshot_t *p)
+static int riotcore_snapshot_read(riot_context_t *riot_context, snapshot_t *p, int validate_only)
 {
     uint8_t vmajor, vminor;
     uint8_t byte_r_N;
@@ -460,9 +460,6 @@ int riotcore_snapshot_read_module(riot_context_t *riot_context, snapshot_t *p)
         return -1;
     }
 
-    /* just to be safe */
-    alarm_unset(riot_context->alarm);
-
     if (0
         || SMR_B(m, &(riot_context->riot_io)[0]) < 0
         || SMR_B(m, &(riot_context->riot_io)[1]) < 0
@@ -478,6 +475,11 @@ int riotcore_snapshot_read_module(riot_context_t *riot_context, snapshot_t *p)
         return -1;
     }
 
+    if (validate_only) {
+        return snapshot_module_close(m);
+    }
+
+    alarm_unset(riot_context->alarm);
     riot_context->old_pa = riot_context->riot_io[0]
                            | ~(riot_context->riot_io)[1];
     riot_context->undump_pra(riot_context, riot_context->old_pa);
@@ -507,4 +509,16 @@ int riotcore_snapshot_read_module(riot_context_t *riot_context, snapshot_t *p)
     riot_context->read_clk = 0;
 
     return snapshot_module_close(m);
+}
+
+int riotcore_snapshot_validate_module(const riot_context_t *riot_context, snapshot_t *s)
+{
+    riot_context_t candidate = *riot_context;
+
+    return riotcore_snapshot_read(&candidate, s, 1);
+}
+
+int riotcore_snapshot_read_module(riot_context_t *riot_context, snapshot_t *s)
+{
+    return riotcore_snapshot_read(riot_context, s, 0);
 }

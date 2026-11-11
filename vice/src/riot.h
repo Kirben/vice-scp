@@ -96,6 +96,8 @@ uint8_t riotcore_peek(riot_context_t *riot_context, uint16_t addr);
 void riotcore_dump(riot_context_t *riot_context);
 
 int riotcore_snapshot_write_module(struct riot_context_s *riot_context, struct snapshot_s *p);
+int riotcore_snapshot_validate_module(const riot_context_t *riot_context,
+                                      struct snapshot_s *s);
 int riotcore_snapshot_read_module(struct riot_context_s *riot_context, struct snapshot_s *p);
 
 #endif

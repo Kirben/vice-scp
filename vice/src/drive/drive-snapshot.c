@@ -61,6 +61,7 @@
 #include "machine-bus.h"
 #include "machine-drive.h"
 #include "resources.h"
+#include "riot.h"
 #include "rotation.h"
 #include "snapshot.h"
 #include "types.h"
@@ -545,6 +546,17 @@ snapshot_t *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor
     return s;
 }
 
+static int validate_ieee_controller(snapshot_t *s, const diskunit_context_t *unit,
+                                    unsigned int count)
+{
+    if (!unit->riot1 || !unit->riot2
+        || riotcore_snapshot_validate_module(unit->riot1, s) < 0
+        || riotcore_snapshot_validate_module(unit->riot2, s) < 0) {
+        return -1;
+    }
+    return fdc_snapshot_validate_module(s, unit->mynumber, count);
+}
+
 static int validate_gcr_controller(snapshot_t *s, const diskunit_context_t *unit,
                                    unsigned int type)
 {
@@ -793,7 +805,7 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             return -1;
         }
         if (minor_version == 3 && drive_check_old(restored_type)
-            && fdc_snapshot_validate_module(s, unr, has_drives[unr]) < 0) {
+            && validate_ieee_controller(s, unit, has_drives[unr]) < 0) {
             return -1;
         }
         if (minor_version == 1 && validate_gcr_controller(s, unit, restored_type) < 0) {
