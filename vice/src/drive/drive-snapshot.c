@@ -1150,6 +1150,14 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
                 if (machine_drive_snapshot_read(diskunit_context[unr], s) < 0) {
                     return -1;
                 }
+                if (native_backend[unr] == 1) {
+                    /* VIA undump can read the motor pin high while it is
+                       still an input. Keep the motor state validated against
+                       the native flux cursor before restoring the image. */
+                    drive = unit->drives[0];
+                    drive->byte_ready_active = (drive->byte_ready_active & ~BRA_MOTOR_ON)
+                        | (restored_drive[unr][0].byte_ready_active & BRA_MOTOR_ON);
+                }
             }
         }
     }
