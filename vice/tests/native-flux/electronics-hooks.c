@@ -25,6 +25,42 @@ static int initialized;
 static rotation_flux_t input;
 #endif
 
+#ifndef NATIVE_REFERENCE_ONLY
+/* These circuit fixtures bind a capture directly, without a disk image.
+   Match the production queries for that case and fail if the test tries
+   to write back through the absent image. */
+uint64_t fsimage_scp_physical_turn(const struct disk_image_s *disk, unsigned int slot)
+{
+    (void)slot;
+    if (disk != NULL) {
+        abort();
+    }
+    return 0;
+}
+
+int fsimage_scp_can_write_slot(const struct disk_image_s *disk, unsigned int slot)
+{
+    (void)slot;
+    if (disk != NULL) {
+        abort();
+    }
+    return 0;
+}
+
+void fsimage_scp_adopt_write(struct disk_image_s *disk, struct flux_capture_s *capture)
+{
+    (void)disk;
+    (void)capture;
+    abort();
+}
+
+void fsimage_scp_abort_write(struct disk_image_s *disk)
+{
+    (void)disk;
+    abort();
+}
+#endif
+
 void *lib_malloc(size_t size) { return malloc(size); }
 void *lib_realloc(void *p, size_t size) { return realloc(p, size); }
 void lib_free(void *p) { free(p); }
