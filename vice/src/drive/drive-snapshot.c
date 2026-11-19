@@ -800,6 +800,12 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
             snapshot_module_close(m);
             return -1;
         }
+        if ((minor_version == 1 || minor_version == 2)
+            && native_flux_module_present(s, unr + 8, 1) != 0) {
+            snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+            snapshot_module_close(m);
+            return -1;
+        }
         if (minor_version == 2 && (!drive_check_scp_mfm(restored_type, FLUX_CAPTURE_MFM)
                                    || (unsigned int)restored_read_only > 1)) {
             snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
