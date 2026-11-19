@@ -703,11 +703,16 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
         if (has_tde[unr]) {
 
             /* FIXME: does this really have to go into the drive snapshot? */
-            if (SMR_DW_INT(m, &sync_factor) < 0) {
+            int unit_sync_factor;
+
+            if (SMR_DW_INT(m, &unit_sync_factor) < 0
+                || (protect_scp && has_saved_sync_factor && unit_sync_factor != sync_factor)) {
+                snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
                 snapshot_module_close(m);
                 return -1;
             }
 
+            sync_factor = unit_sync_factor;
             has_saved_sync_factor = 1;
 
             for (dnr = 0; dnr < has_drives[unr]; dnr++) {
@@ -980,8 +985,10 @@ static int read_drive_snapshot(snapshot_t *s, flux_capture_t *mfm_captures[NUM_D
     if (read_machine_modules) {
         /* The VIC-II reader needs the saved video standard. Apply it before
            reading the remaining machine modules, with the old disks mounted. */
-        if (has_saved_sync_factor) {
-            resources_set_int("MachineVideoStandard", sync_factor);
+        if (has_saved_sync_factor
+            && resources_set_int("MachineVideoStandard", sync_factor) < 0) {
+            snapshot_set_error(SNAPSHOT_MODULE_INCOMPATIBLE);
+            return -1;
         }
         if (read_machine_modules(s, event_mode) < 0) {
             return -1;
