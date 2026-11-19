@@ -1312,6 +1312,9 @@ int drive_snapshot_read_with_machine_busses(snapshot_t *s,
     flux_capture_t *mfm_captures[NUM_DISK_UNITS] = {NULL};
     flux_capture_t *ieee_captures[NUM_DISK_UNITS][NUM_DRIVES] = {{NULL}};
     int preserve_scp = read_machine_modules && snapshot_changes_scp(s);
+    int previous_sync_factor;
+    int restore_sync_factor = preserve_scp
+        && resources_get_int("MachineVideoStandard", &previous_sync_factor) == 0;
     int result = read_drive_snapshot(s, mfm_captures, ieee_captures,
                                      preserve_scp ? read_machine_modules : NULL, event_mode, available_busses);
     unsigned int unit, drive;
@@ -1320,6 +1323,14 @@ int drive_snapshot_read_with_machine_busses(snapshot_t *s,
         flux_capture_destroy(mfm_captures[unit]);
         for (drive = 0; drive < NUM_DRIVES; ++drive) {
             flux_capture_destroy(ieee_captures[unit][drive]);
+        }
+    }
+    if (result < 0 && restore_sync_factor) {
+        int current_sync_factor;
+
+        if (resources_get_int("MachineVideoStandard", &current_sync_factor) == 0
+            && current_sync_factor != previous_sync_factor) {
+            resources_set_int("MachineVideoStandard", previous_sync_factor);
         }
     }
     if (result == 0 && read_machine_modules && !preserve_scp) {
