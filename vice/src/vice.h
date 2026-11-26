@@ -35,6 +35,10 @@
 
 /* ------------------------------------------------------------------------- */
 
+/* Identify this local native SCP build in user-visible version strings. */
+#undef VERSION
+#define VERSION "3.10 native SCP"
+
 /* Portability... */
 
 /* currently tested/testing for the following cpu types:
