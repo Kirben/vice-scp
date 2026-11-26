@@ -1221,6 +1221,7 @@ int fdc_snapshot_write_module(snapshot_t *p, int fnum)
     snapshot_module_t *m;
     char *name;
     int rc = 0;
+    uint8_t minor = 0;
     unsigned int drive;
 
     fdc_t *sysfdc = &fdc[fnum];
@@ -1231,7 +1232,13 @@ int fdc_snapshot_write_module(snapshot_t *p, int fnum)
 
     name = lib_msprintf("FDC%i", fnum);
 
-    m = snapshot_module_create(p, name, SNAP_MAJOR, SNAP_MINOR);
+    for (drive = 0; drive < sysfdc->num_drives; drive++) {
+        if (sysfdc->mechs[drive].image
+            && sysfdc->mechs[drive].image->type == DISK_IMAGE_TYPE_SCP) {
+            minor = SNAP_MINOR;
+        }
+    }
+    m = snapshot_module_create(p, name, SNAP_MAJOR, minor);
 
     lib_free(name);
 
@@ -1264,7 +1271,7 @@ int fdc_snapshot_write_module(snapshot_t *p, int fnum)
         return rc;
     }
 
-    for (drive = 0; drive < sysfdc->num_drives; drive++) {
+    for (drive = 0; minor && drive < sysfdc->num_drives; drive++) {
         if (SMW_DW(m, sysfdc->mechs[drive].wps_change) < 0) {
             snapshot_module_close(m);
             return -1;
