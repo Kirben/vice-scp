@@ -1,0 +1,416 @@
+# Builds of the native SCP VICE 3.10 backport for every platform covered by
+# the upstream snapshot workflow: Windows (GTK3, SDL2, SDL1; 64-bit, plus an
+# experimental 32-bit SDL2 build), Debian packages (GTK3, SDL2, SDL1,
+# Headless) and macOS disk images (GTK3, SDL2; Intel and Apple Silicon).
+#
+# Run it from the Actions tab (workflow_dispatch) to get build artifacts, or
+# push a tag such as v3.10.0-scp1 to also collect everything into a draft
+# release. Unlike build-main-on-push.yml it never deletes releases, does not
+# notify IRC, and reports a failed stylecheck without stopping the builds.
+
+name: SCP Release Builds
+
+on:
+  push:
+    tags:
+      - 'v*-scp*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scp-release-builds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_doc:
+    name: Stylecheck and Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: git config --global core.autocrlf input
+
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt-get -y install autoconf \
+                                  automake \
+                                  build-essential \
+                                  byacc \
+                                  dos2unix \
+                                  flex \
+                                  libcurl4-openssl-dev \
+                                  libpcap-dev \
+                                  texinfo \
+                                  texlive-fonts-recommended \
+                                  texlive-latex-extra \
+                                  xa65
+
+      - name: Configure
+        shell: bash
+        run: |
+          cd vice
+          ./src/buildtools/genvicedate_h.sh
+          ./autogen.sh
+          ./configure --enable-option-checking=fatal \
+                      --enable-headlessui \
+                      --enable-html-docs \
+                      --enable-pdf-docs \
+                      --without-alsa \
+                      --without-png \
+                      --without-pulse
+
+      - name: Stylecheck (reported, not blocking)
+        continue-on-error: true
+        shell: bash
+        run: make -C vice stylecheck
+
+      - name: Build Headless and Documentation
+        shell: bash
+        run: make -C vice -j "$(nproc)" -s
+
+      - name: Upload Documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: vice-pdf
+          path: vice/doc/vice.pdf
+          retention-days: 7
+
+  build_windows:
+    name: Windows ${{ matrix.ui.name }} ${{ matrix.arch.arch }}
+    needs: build_doc
+    runs-on: windows-latest
+    continue-on-error: ${{ matrix.experimental == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - { msystem: MINGW64, arch: x86_64, prefix: mingw64 }
+        ui:
+          - { name: GTK3, pacboy: 'gtk3:p' }
+          - { name: SDL2, pacboy: 'SDL2:p SDL2_image:p' }
+          - { name: SDL1, pacboy: 'SDL:p SDL_image:p' }
+        include:
+          # Upstream disables 32-bit builds; MSYS2's i686 package set may be
+          # incomplete, so a failure here does not fail the workflow.
+          - arch: { msystem: MINGW32, arch: i686, prefix: mingw32 }
+            ui: { name: SDL2, pacboy: 'SDL2:p SDL2_image:p' }
+            experimental: true
+    steps:
+      - run: git config --global core.autocrlf input
+        shell: bash
+
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Download Documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: vice-pdf
+          path: vice/doc/
+
+      - name: Install Dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.arch.msystem }}
+          update: true
+          install: >-
+            autotools
+            base-devel
+            git
+            p7zip
+            subversion
+            unzip
+            xmlto
+            zip
+          pacboy: >-
+            ${{ matrix.ui.pacboy }}
+            curl:p
+            docbook-xml:p
+            docbook-xsl:p
+            flac:p
+            giflib:p
+            glew:p
+            icoutils:p
+            lame:p
+            libpcap:p
+            libusb:p
+            libvorbis:p
+            mpg123:p
+            ntldd:p
+            pkg-config:p
+            portaudio:p
+            toolchain:p
+            xa65:p
+
+      - name: Build and install libieee1284
+        shell: msys2 {0}
+        run: |
+          OLDDIR=$(pwd)
+          mkdir ~/work/
+          cd ~/work
+          git clone https://github.com/twaugh/libieee1284
+          cd libieee1284
+          export XML_CATALOG_FILES="/${{ matrix.arch.prefix }}/etc/xml/catalog"
+          ./bootstrap
+          ./configure --without-python
+          make CFLAGS="-Wno-incompatible-pointer-types"
+          make install
+          cd "$OLDDIR"
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          (cd vice && ./autogen.sh)
+          # 'release' runs configure without an SVN revision override, so the
+          # git ref name does not leak into VICE's version information.
+          MINGW_INSTALLS=${{ matrix.arch.msystem }} ./vice/build/github-actions/build-msys2.sh ${{ matrix.ui.name }} release
+          mkdir -p dist
+          for f in vice/*.zip vice/*.7z; do
+            name=$(basename "$f" | sed -E 's/^([A-Za-z0-9]+VICE-[0-9.]+)-/\1-SCP-/')
+            mv "$f" "dist/$name"
+          done
+          ls -l dist
+
+      - name: Upload Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: scp-windows-${{ matrix.arch.arch }}-${{ matrix.ui.name }}
+          path: dist/*
+          retention-days: 14
+
+  build_deb:
+    name: Debian ${{ matrix.ui.name }}
+    needs: build_doc
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ui:
+          - { name: 'GTK3',
+              conf: '--enable-gtk3ui --with-pulse',
+              deps: 'libevdev-dev libglew-dev libgtk-3-dev libpulse-dev' }
+          - { name: 'SDL2',
+              conf: '--enable-sdl2ui --with-sdlsound --without-pulse',
+              deps: 'libsdl2-dev libsdl2-image-dev' }
+          - { name: 'SDL1',
+              conf: '--enable-sdl1ui --with-sdlsound --without-pulse',
+              deps: 'libsdl1.2-dev libsdl-image1.2-dev' }
+          - { name: 'Headless',
+              conf: '--enable-headlessui --with-pulse',
+              deps: 'libpulse-dev' }
+    steps:
+      - shell: bash
+        run: git config --global core.autocrlf input
+
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Download Documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: vice-pdf
+          path: vice/doc/
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf \
+                              automake \
+                              build-essential \
+                              byacc \
+                              devscripts \
+                              dos2unix \
+                              fakeroot \
+                              flex \
+                              libasound-dev \
+                              libcap-dev \
+                              libcurl4-openssl-dev \
+                              libflac-dev \
+                              libgif-dev \
+                              libieee1284-3-dev \
+                              libmp3lame-dev \
+                              libmpg123-dev \
+                              libpcap-dev \
+                              libpng-dev \
+                              libusb-1.0-0 \
+                              libusb-1.0-0-dev \
+                              libusb-dev \
+                              libvorbis-dev \
+                              portaudio19-dev \
+                              texinfo \
+                              texlive-fonts-recommended \
+                              texlive-latex-extra \
+                              xa65
+          sudo apt install -y ${{ matrix.ui.deps }}
+
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p build/usr
+          cd vice
+          ./src/buildtools/genvicedate_h.sh
+          ./autogen.sh
+          # ALSA is required for SDL2 as well for midi support
+          ./configure --enable-option-checking=fatal \
+                      --prefix=/usr \
+                      ${{ matrix.ui.conf }} \
+                      --disable-arch \
+                      --disable-html-docs \
+                      --enable-catweasel \
+                      --enable-cpuhistory \
+                      --enable-ethernet \
+                      --enable-midi \
+                      --enable-parsid \
+                      --enable-pdf-docs \
+                      --with-alsa \
+                      --with-fastsid \
+                      --with-flac \
+                      --with-gif \
+                      --with-lame \
+                      --with-libcurl \
+                      --with-libieee1284 \
+                      --with-mpg123 \
+                      --with-png \
+                      --with-portaudio \
+                      --with-resid \
+                      --with-vorbis
+          make -j2 -s --no-print-directory
+          # Don't use install-strip, we want symbols intact for backtraces
+          make DESTDIR=$HOME/build install
+
+      - name: Make Deb
+        id: make_deb
+        shell: bash
+        run: |
+          # Package version 3.10+scp, so these never look like stock 3.10.
+          sed -i 's/+__SVN_REVISION__/+scp/' vice/build/debian/control.*
+          ./vice/build/github-actions/build-deb.sh ${{ matrix.ui.name }} release
+          mkdir -p dist
+          # build-deb.sh writes <ui>vice_3.10.deb into the workspace root.
+          for f in *.deb; do
+            mv "$f" "dist/${f%.deb}+scp_amd64.deb"
+          done
+          ls -l dist
+
+      - name: Upload Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: scp-deb-${{ matrix.ui.name }}
+          path: dist/*
+          retention-days: 14
+
+  build_mac:
+    name: macOS ${{ matrix.ui.name }} ${{ matrix.silicon.name }}
+    needs: build_doc
+    env:
+      SHARED_DEPS: "autoconf automake pkg-config xa lame dos2unix giflib libpng giflib libvorbis flac"
+    strategy:
+      fail-fast: false
+      matrix:
+        silicon:
+          - { name: 'Intel', runner: 'macos-15-intel', conf: '--enable-macos-minimum-version=15.0' }
+          - { name: 'Apple Silicon', runner: 'macos-14', conf: '--enable-macos-minimum-version=14.0' }
+        ui:
+          - { name: 'GTK3', conf: '--enable-gtk3ui', deps: 'gtk+3 librsvg adwaita-icon-theme glew' }
+          - { name: 'SDL2', conf: '--enable-sdl2ui', deps: 'sdl2 sdl2_image' }
+    runs-on: ${{ matrix.silicon.runner }}
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Download Documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: vice-pdf
+          path: vice/doc/
+
+      - name: Homebrew Install Dependencies
+        id: homebrew
+        run: |
+          brew list -1 | xargs brew uninstall --force
+          brew update
+          brew install ${{ env.SHARED_DEPS }} ${{ matrix.ui.deps }}
+          echo "brew_prefix=$(brew --prefix)" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          cd vice
+          ./src/buildtools/genvicedate_h.sh
+          ./autogen.sh
+          ./configure --enable-option-checking=fatal \
+                      --disable-arch \
+                      --disable-html-docs \
+                      --disable-openmp \
+                      --disable-pdf-docs \
+                      --enable-cpuhistory \
+                      --enable-ethernet \
+                      --enable-midi \
+                      --enable-parsid \
+                      --with-fastsid \
+                      --with-flac \
+                      --with-gif \
+                      --with-lame \
+                      --with-libcurl \
+                      --with-png \
+                      --with-resid \
+                      --with-vorbis \
+                      ${{ matrix.ui.conf }} \
+                      ${{ matrix.silicon.conf }}
+          make -j $(sysctl -n hw.ncpu) -s
+          DEPS_PREFIX=${{ steps.homebrew.outputs.brew_prefix }} make bindistzip
+          mkdir -p ../dist
+          mv *.dmg ../dist/
+          ls -l ../dist
+
+      - name: Upload Disk Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: scp-macos-${{ matrix.silicon.runner }}-${{ matrix.ui.name }}
+          path: dist/*
+          retention-days: 14
+
+  draft_release:
+    name: Collect Draft Release
+    needs: [build_windows, build_deb, build_mac]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scp-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create or Update Draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          ls -l
+          sha256sum * > SHA256SUMS-CI.txt
+          cat SHA256SUMS-CI.txt
+          cat > ../notes.md <<EOF
+          Automated CI builds of \`${GITHUB_SHA::10}\` for all platforms.
+
+          These packages were built by GitHub Actions and have **not** been
+          through the regression tests used for the Windows SDL2 release
+          packages. See README-NATIVE-SCP.txt in each package for usage.
+          EOF
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag \
+              --title "VICE 3.10 SCP $TAG (CI builds)" --notes-file ../notes.md
+          fi
+          gh release upload "$TAG" * --clobber
