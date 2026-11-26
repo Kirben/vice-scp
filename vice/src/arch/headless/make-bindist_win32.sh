@@ -222,7 +222,7 @@ copy_data()
 # TODO: We should probably add a 'Readme-Headless.txt' or so
 copy_docs()
 {
-    docs="$TOPSRCDIR/COPYING $TOPSRCDIR/NEWS $TOPSRCDIR/README $TOPBUILDDIR/doc/vice.pdf"
+    docs="$TOPSRCDIR/COPYING $TOPSRCDIR/NEWS $TOPSRCDIR/README $TOPSRCDIR/README-NATIVE-SCP.txt $TOPBUILDDIR/doc/vice.pdf"
     mkdir $BINDISTDIR/doc
     for d in $docs; do
         if [ -f $d ]; then

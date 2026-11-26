@@ -65,6 +65,7 @@ fi
 cp -R ${HOME}/build/* ${DEB_DIR}/
 # Copy the documentation
 cp vice/doc/vice.pdf ${DEB_DIR}/usr/share/doc/vice/
+cp vice/README-NATIVE-SCP.txt ${DEB_DIR}/usr/share/doc/vice/
 if [ "$UI" = "gtk3" ]; then
     # Copy .desktop files
     cp vice/data/common/*.desktop ${DEB_DIR}/usr/share/applications
