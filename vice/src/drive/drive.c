@@ -68,6 +68,7 @@
 #include "maincpu.h"
 #include "resources.h"
 #include "rotation.h"
+#include "rotation-flux.h"
 #include "sound.h"
 #include "types.h"
 #include "uiapi.h"
@@ -322,6 +323,11 @@ void drive_shutdown(void)
         for (dnr = 0; dnr < NUM_DRIVES; dnr++) {
             drive_t *drive = unit->drives[dnr];
 
+            if (drive->flux != NULL) {
+                rotation_flux_unbind(drive->flux);
+                lib_free(drive->flux);
+                drive->flux = NULL;
+            }
             if (drive->gcr) {
                 gcr_destroy_image(drive->gcr);
             }
@@ -691,6 +697,26 @@ void drive_set_half_track(int num, int side, drive_t *dptr)
     unsigned int type = dptr->diskunit->type;
     int tmp;
 
+    if (dptr->flux != NULL) {
+        if (drive_get_num_heads(type) == 1) {
+            side = 0;
+        }
+        if (num < 2) {
+            num = 2;
+        }
+        if (num > (int)FLUX_CAPTURE_TRACKS + 1) {
+            num = FLUX_CAPTURE_TRACKS + 1;
+        }
+        rotation_rotate_disk(dptr);
+        rotation_flux_finish_write(dptr);
+        flux_playback_change_track(&dptr->flux->playback,
+                                   rotation_flux_track(num, side, dptr->flux->align_halftrack));
+        dptr->current_half_track = num;
+        dptr->side = side;
+        dptr->GCR_track_start_ptr = NULL;
+        dptr->GCR_current_track_size = dptr->GCR_head_offset = 0;
+        return;
+    }
     if ((type == DRIVE_TYPE_1540
          || type == DRIVE_TYPE_1541
          || type == DRIVE_TYPE_1541II
@@ -752,6 +778,9 @@ void drive_gcr_data_writeback(drive_t *drive)
     int tmp;
 
     if (drive->image == NULL) {
+        return;
+    }
+    if (drive->image->type == DISK_IMAGE_TYPE_SCP) {
         return;
     }
 

@@ -140,6 +140,7 @@ int fsimage_check_sector(const disk_image_t *image, unsigned int track,
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_G71: /* FIXME: does this handle the second side correctly? */
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
             if (track > image->tracks || track > MAX_TRACKS_1541) {
                return FSIMAGE_BAD_TRKNUM;
             }

@@ -28,6 +28,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "archdep.h"
 #include "diskconstants.h"
@@ -35,6 +36,9 @@
 #include "fsimage-dxx.h"
 #include "fsimage-gcr.h"
 #include "fsimage-p64.h"
+#include "fsimage-scp.h"
+#include "scp-reader.h"
+#include "flux-view.h"
 #include "fsimage-probe.h"
 #include "fsimage.h"
 #include "lib.h"
@@ -113,22 +117,86 @@ void fsimage_media_destroy(disk_image_t *image)
 
     fsimage = image->media.fsimage;
 
+    if (fsimage == NULL) {
+        return;
+    }
     if (fsimage->fd) {
         fsimage_close(image);
     }
+    fsimage_scp_dispose(image);
+    lib_free(fsimage->flux_scp_backing_path);
+    lib_free(fsimage->flux_scp_turns);
+    flux_capture_destroy(fsimage->flux_scp_physical);
+    lib_free(fsimage->flux_scp_wrsp);
+    lib_free(fsimage->flux_scp_trailer);
     lib_free(fsimage->name);
     lib_free(fsimage);
+    image->media.fsimage = NULL;
 }
 
 /*-----------------------------------------------------------------------*/
 
-int fsimage_open(disk_image_t *image)
+/* try to open image, return 0 on success, -1 on failure */
+int fsimage_open_probe(disk_image_t *image)
 {
     fsimage_t *fsimage;
     size_t length;
     unsigned int isdir;
 
     fsimage = image->media.fsimage;
+    fsimage->error_info.map = NULL;
+
+    /* stat file to find out if it exists or if it is a directory */
+    if (archdep_stat(fsimage->name, &length, &isdir) < 0) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+
+    /* it exists, is it a directory? */
+    if (isdir) {
+        log_error(fsimage_log, "Cannot open directory `%s' as an image.", fsimage->name);
+        return -1;
+    }
+
+    /* proceed with normal opening */
+    fsimage->fd = zfile_fopen(fsimage->name, MODE_READ);
+
+    if (fsimage->fd == NULL) {
+        log_error(fsimage_log, "Cannot open file `%s'.", fsimage->name);
+        return -1;
+    }
+
+    if (fsimage_probe(image) == 0) {
+        /* valid image */
+        fsimage_close(image);
+        return 0;
+    }
+
+    fsimage_close(image);
+    return -1;
+}
+
+int fsimage_open(disk_image_t *image)
+{
+    fsimage_t *fsimage;
+    size_t length;
+    unsigned int isdir;
+    int requested_readonly = image->read_only;
+
+    fsimage = image->media.fsimage;
+    lib_free(fsimage->flux_scp_backing_path);
+    fsimage->flux_scp_backing_path = NULL;
+    lib_free(fsimage->flux_scp_turns);
+    flux_capture_destroy(fsimage->flux_scp_physical);
+    fsimage->flux_scp_turns = NULL;
+    fsimage->flux_scp_physical = NULL;
+    memset(fsimage->flux_scp_flipped_dirty, 0, sizeof(fsimage->flux_scp_flipped_dirty));
+    lib_free(fsimage->flux_scp_wrsp);
+    lib_free(fsimage->flux_scp_trailer);
+    fsimage->flux_scp_wrsp = NULL;
+    fsimage->flux_scp_trailer = NULL;
+    fsimage->flux_scp_trailer_size = 0;
+    fsimage->flux_scp_trailer_offset = 0;
     fsimage->error_info.map = NULL;
 
     /* stat file to find out if it exists or if it is a directory */
@@ -162,6 +230,9 @@ int fsimage_open(disk_image_t *image)
     }
 
     if (fsimage_probe(image) == 0) {
+        if (image->type == DISK_IMAGE_TYPE_SCP && !requested_readonly) {
+            fsimage_scp_enable_write(image, 0, SCP_WRITE_300_ONLY, 0, 0);
+        }
         return 0;
     }
 
@@ -176,7 +247,17 @@ int fsimage_close(disk_image_t *image)
 
     fsimage = image->media.fsimage;
 
+    /* No drive may retain a borrowed cursor here. */
+    if (image->type == DISK_IMAGE_TYPE_SCP && fsimage_scp_flush(image, NULL) < 0) {
+        log_error(fsimage_log, "Could not save SCP disk image '%s'.", fsimage->name);
+        fsimage_scp_dispose(image);
+        return -1;
+    }
+    fsimage_scp_dispose(image);
     if (fsimage->fd == NULL) {
+        if (fsimage->flux_only) {
+            return 0;
+        }
         log_error(fsimage_log, "Cannot close file `%s'.", fsimage->name);
         return -1;
     }
@@ -198,14 +279,52 @@ int fsimage_close(disk_image_t *image)
 
 /*-----------------------------------------------------------------------*/
 
+static flux_view_t *fsimage_get_flux_view(fsimage_t *fsimage)
+{
+    if (fsimage->flux_view == NULL) {
+        fsimage->flux_view = flux_view_create(fsimage->flux);
+    }
+    return fsimage->flux_view;
+}
+
+int fsimage_scp_write_sector(disk_image_t *image, const uint8_t *buf, const disk_addr_t *dadr)
+{
+    flux_capture_t *replacement;
+    int rc;
+    if (image->read_only) {
+        return -1;
+    }
+    rc = flux_view_write_sector(fsimage_get_flux_view(image->media.fsimage), dadr->track,
+                                dadr->sector, buf, &replacement);
+    if (rc != FLUX_OK) {
+        fsimage_scp_abort_write(image);
+        return -1;
+    }
+    if (replacement) {
+        fsimage_scp_adopt_write(image, replacement);
+    }
+    return 0;
+}
+
+int fsimage_scp_read_disk_id(const disk_image_t *image, unsigned int track, uint8_t id[2])
+{
+    return flux_view_read_disk_id(fsimage_get_flux_view(image->media.fsimage), track, id);
+}
+
 int fsimage_read_sector(const disk_image_t *image, uint8_t *buf, const disk_addr_t *dadr)
 {
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
 
-    if (fsimage == NULL || fsimage->fd == NULL) {
+    if (fsimage == NULL) {
         log_error(fsimage_log, "Attempt to read without disk image.");
+        return CBMDOS_IPE_NOT_READY;
+    }
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        return flux_view_read(fsimage_get_flux_view(fsimage), dadr->track, dadr->sector, buf);
+    }
+    if (fsimage->fd == NULL) {
         return CBMDOS_IPE_NOT_READY;
     }
 
@@ -243,6 +362,9 @@ int fsimage_write_sector(disk_image_t *image, const uint8_t *buf,
 {
     fsimage_t *fsimage;
 
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        return -1;
+    }
     fsimage = image->media.fsimage;
 
     if (fsimage->fd == NULL) {
@@ -305,5 +427,5 @@ off_t fsimage_size(const disk_image_t *image)
     fsimage_t *fsimage;
 
     fsimage = image->media.fsimage;
-    return archdep_file_size(fsimage->fd);
+    return fsimage->fd ? archdep_file_size(fsimage->fd) : 0;
 }

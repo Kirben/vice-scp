@@ -30,6 +30,7 @@
 #include "types.h"
 
 struct disk_image_s;
+struct flux_capture_s;
 struct drive_s;
 struct snapshot_s;
 typedef struct fd_drive_s fd_drive_t;
@@ -41,7 +42,11 @@ void fdd_shutdown(fd_drive_t *drv);
 void fdd_image_attach(fd_drive_t *drv, struct disk_image_s *image);
 void fdd_image_detach(fd_drive_t *drv);
 uint16_t fdd_read(fd_drive_t *drv);
+/* Preserve the legacy error return for non-SCP callers. */
+#define FDD_SCP_WRITE_ERROR (-2)
 int fdd_write(fd_drive_t *drv, uint16_t data);
+int fdd_scp_write_pending(const fd_drive_t *drv);
+int fdd_finish_scp_write(fd_drive_t *drv);
 void fdd_flush(fd_drive_t *drv);
 void fdd_seek_pulse(fd_drive_t *drv, int dir);
 void fdd_select_head(fd_drive_t *drv, int head);
@@ -58,5 +63,7 @@ uint16_t fdd_crc(uint16_t crc, uint8_t b);
 
 int fdd_snapshot_write_module(fd_drive_t *drv, struct snapshot_s *s);
 int fdd_snapshot_read_module(fd_drive_t *drv, struct snapshot_s *s);
+int fdd_snapshot_validate(struct snapshot_s *s, unsigned int number,
+                              const struct flux_capture_s *capture, int read_only);
 
 #endif

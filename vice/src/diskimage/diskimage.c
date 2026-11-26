@@ -91,6 +91,7 @@ unsigned int disk_image_speed_map(unsigned int format, unsigned int track)
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
             return (track < 31) + (track < 25) + (track < 18);
         case DISK_IMAGE_TYPE_D80:
             return (track < 65) + (track < 54) + (track < 40);
@@ -177,6 +178,7 @@ unsigned int disk_image_sector_per_track(unsigned int format,
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D71:
         case DISK_IMAGE_TYPE_G71:
             return sector_map_d64[disk_image_speed_map(format, track)];
@@ -249,6 +251,7 @@ unsigned int disk_image_raw_track_size(unsigned int format,
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D71:
         case DISK_IMAGE_TYPE_G71:
             return raw_track_size_d64[disk_image_speed_map(format, track)];
@@ -295,6 +298,7 @@ unsigned int disk_image_gap_size(unsigned int format, unsigned int track)
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D71:
         case DISK_IMAGE_TYPE_G71:
             return gap_size_d64[disk_image_speed_map(format, track)];
@@ -324,6 +328,7 @@ unsigned int disk_image_header_gap_size(unsigned int format, unsigned int track)
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D71:
         case DISK_IMAGE_TYPE_G71:
             return 9;
@@ -354,6 +359,7 @@ unsigned int disk_image_sync_size(unsigned int format, unsigned int track)
 #endif
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D71:
         case DISK_IMAGE_TYPE_G71:
             return 5; /* 40 bits */
@@ -408,6 +414,7 @@ static const char *disk_image_type(const disk_image_t *image)
         case DISK_IMAGE_TYPE_D67: return "D67";
         case DISK_IMAGE_TYPE_G64: return "G64";
         case DISK_IMAGE_TYPE_P64: return "P64";
+        case DISK_IMAGE_TYPE_SCP: return "SCP";
 #ifdef HAVE_X64_IMAGE
         case DISK_IMAGE_TYPE_X64: return "X64";
 #endif
@@ -674,7 +681,7 @@ int disk_image_write_sector(disk_image_t *image, const uint8_t *buf, const disk_
 {
     int rc = 0;
 
-    if (image->read_only != 0) {
+    if (image->read_only != 0 || image->type == DISK_IMAGE_TYPE_SCP) {
         log_error(disk_image_log, "Attempt to write to read-only disk image.");
         return -1;
     }
@@ -705,7 +712,7 @@ int disk_image_write_half_track(disk_image_t *image, unsigned int half_track,
         log_error(disk_image_log, "Attempt to write beyond extension limit of disk image.");
         return -1;
     }
-    if (image->read_only != 0) {
+    if (image->read_only != 0 || image->type == DISK_IMAGE_TYPE_SCP) {
         log_error(disk_image_log, "Attempt to write to read-only disk image.");
         return -1;
     }
@@ -724,6 +731,8 @@ int disk_image_write_half_track(disk_image_t *image, unsigned int half_track,
 int disk_image_read_image(const disk_image_t *image)
 {
     switch (image->type) {
+        case DISK_IMAGE_TYPE_SCP:
+            return disk_image_flux_capture_get(image) != NULL ? 0 : -1;
         case DISK_IMAGE_TYPE_P64:
             return fsimage_read_p64_image(image);
         case DISK_IMAGE_TYPE_G64:
@@ -736,7 +745,19 @@ int disk_image_read_image(const disk_image_t *image)
 
 int disk_image_write_p64_image(const disk_image_t *image)
 {
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        return -1;
+    }
     return fsimage_write_p64_image(image);
+}
+
+const struct flux_capture_s *disk_image_flux_capture_get(const disk_image_t *image)
+{
+    if (image == NULL || image->device != DISK_IMAGE_DEVICE_FS
+        || image->type != DISK_IMAGE_TYPE_SCP || image->media.fsimage == NULL) {
+        return NULL;
+    }
+    return image->media.fsimage->flux;
 }
 
 /*-----------------------------------------------------------------------*/

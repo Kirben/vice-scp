@@ -338,6 +338,7 @@ static const char * const extensions[] = {
     ".d4m",
     ".g64",
     ".p64",
+    ".scp",
     ".g41",
     ".x64",
     ".dsk",
@@ -1090,6 +1091,30 @@ static int handle_close(zfile_t *ptr)
     lib_free(ptr);
 
     return 0;
+}
+
+int zfile_is_gzip(FILE *stream)
+{
+    zfile_t *entry;
+
+    for (entry = zfile_list; entry != NULL; entry = entry->next) {
+        if (entry->stream == stream) {
+            return entry->type == COMPR_GZIP;
+        }
+    }
+    return 0;
+}
+
+void zfile_set_read_only(FILE *stream)
+{
+    zfile_t *entry;
+
+    for (entry = zfile_list; entry != NULL; entry = entry->next) {
+        if (entry->stream == stream) {
+            entry->write_mode = 0;
+            return;
+        }
+    }
 }
 
 /* `fclose()' wrapper.  */

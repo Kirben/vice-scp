@@ -36,6 +36,8 @@
 #include "gcr.h"
 #include "fsimage-gcr.h"
 #include "fsimage-p64.h"
+#include "fsimage-scp.h"
+#include "scp-reader.h"
 #include "fsimage-probe.h"
 #include "fsimage.h"
 #include "lib.h"
@@ -43,6 +45,7 @@
 #include "machine-drive.h"
 #include "types.h"
 #include "util.h"
+#include "zfile.h"
 #include "x64.h"
 
 #define IS_D67_LEN(x) ((x) == D67_FILE_SIZE)
@@ -793,6 +796,32 @@ static int disk_image_check_for_d90(disk_image_t *image)
 
 int fsimage_probe(disk_image_t *image)
 {
+    const char *name = image->media.fsimage->name;
+    const char *extension = util_get_extension(name);
+    size_t name_length = strlen(name);
+    int scp_name = (extension && util_strcasecmp(extension, "scp") == 0)
+        || (name_length >= 7 && util_strcasecmp(name + name_length - 7, ".scp.gz") == 0);
+    int scp_result;
+
+    image->type = DISK_IMAGE_TYPE_UNKNOWN;
+
+    /* Signature-based flux recognition must precede all size-based probes.
+       Explicit comparisons: negative errors are not successful recognition. */
+    scp_result = fsimage_scp_read(image);
+    if (scp_name) {
+        image->type = DISK_IMAGE_TYPE_SCP;
+    }
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        zfile_set_read_only(image->media.fsimage->fd);
+    }
+    if (scp_result == FLUX_OK) {
+        disk_image_check_log(image, "SCP");
+        return 0;
+    }
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        log_error(disk_image_probe_log, "Invalid or unsupported SCP image (%d).", scp_result);
+        return -1;
+    }
     if (disk_image_check_for_d64(image)) {
         return 0;
     }

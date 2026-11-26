@@ -60,6 +60,7 @@ struct snapshot_s;
 void fdc_init(struct diskunit_context_s *drv);
 void fdc_reset(unsigned int fnum, unsigned int enabled);
 
+int fdc_snapshot_validate_module(struct snapshot_s *s, int drv, unsigned int count);
 int fdc_snapshot_read_module(struct snapshot_s *s, int drv);
 int fdc_snapshot_write_module(struct snapshot_s *s, int drv);
 

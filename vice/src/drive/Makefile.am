@@ -37,6 +37,8 @@ libdrive_a_SOURCES = \
 	drive-resources.h \
 	drive-snapshot.c \
 	drive-snapshot.h \
+	drive-flux-snapshot.c \
+	drive-flux-snapshot.h \
 	drive-sound.c \
 	drive-sound.h \
 	drive-writeprotect.c \
@@ -63,6 +65,7 @@ libdrive_a_SOURCES = \
 	iecieee.h \
 	ieee.h \
 	rotation.c \
+	rotation-flux.h \
 	rotation.h \
 	tcbm.h \
 	viad.h

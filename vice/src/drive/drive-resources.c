@@ -31,6 +31,7 @@
 #include <stdio.h>
 
 #include "attach.h"
+#include "diskimage.h"
 #include "drive-check.h"
 #include "drive-resources.h"
 #include "drive.h"
@@ -43,6 +44,7 @@
 #include "iecdrive.h"
 #include "lib.h"
 #include "log.h"
+#include "rotation-flux.h"
 #include "machine.h"
 #include "machine-bus.h"
 #include "machine-drive.h"
@@ -68,6 +70,11 @@ static int set_drive_true_emulation(int val, void *param)
     unsigned int thistde = val ? 1 : 0;
     unsigned int thisdnr = vice_ptr_to_int(param);
 
+    if (!thistde
+        && (disk_image_flux_capture_get(diskunit_context[thisdnr]->drives[0]->image)
+            || disk_image_flux_capture_get(diskunit_context[thisdnr]->drives[1]->image))) {
+        return -1;
+    }
     DBG(("set_drive_true_emulation unit %u enabled: %u", thisdnr + 8, thistde));
 
     /* always enable TDE on both units of a drive */
@@ -142,6 +149,7 @@ static int set_drive_extend_image_policy(int val, void *param)
 static int drive_resources_type(int val, void *param)
 {
     unsigned int type, current;
+    unsigned int native_dnr;
     int dnr;
     int busses;
     diskunit_context_t *unit;
@@ -153,6 +161,20 @@ static int drive_resources_type(int val, void *param)
     drive = unit->drives[0];
 
     type = (unsigned int)val;
+    for (native_dnr = 0; native_dnr < NUM_DISK_UNITS; native_dnr++) {
+        diskunit_context_t *other = diskunit_context[native_dnr];
+        if (other != NULL
+            && ((other->drives[0] && disk_image_flux_capture_get(other->drives[0]->image))
+                || (other->drives[1] && disk_image_flux_capture_get(other->drives[1]->image)))) {
+            if (type == unit->type) {
+                return 0;
+            }
+            /* Model changes eject images and reconfigure the shared bus.
+               Preserve all mounted native captures, including on other units. */
+            log_error(LOG_DEFAULT, "Detach all native SCP images before changing drive model on unit %u.", (unsigned int)(dnr + 8));
+            return -1;
+        }
+    }
     busses = iec_available_busses();
 
     /* first of all, detach any disk images, so we don't end up with images
@@ -330,6 +352,65 @@ static int set_drive_rpm(int val, void *param)
     return 0;
 }
 
+static int flux_speed_mode[NUM_DISK_UNITS];
+static int flux_alignment[NUM_DISK_UNITS];
+static int scp_flip[NUM_DISK_UNITS];
+static int scp_blank_density[NUM_DISK_UNITS];
+
+static int set_scp_blank_density(int val, void *param)
+{
+    if (val < 0 || val > 3) {
+        return -1;
+    }
+    scp_blank_density[vice_ptr_to_uint(param)] = val;
+    return 0;
+}
+
+static int set_drive_scp_flip(int val, void *param)
+{
+    scp_flip[vice_ptr_to_uint(param)] = val != 0;
+    return 0;
+}
+
+int drive_flux_align_halftrack(unsigned int unit_index)
+{
+    return unit_index < NUM_DISK_UNITS ? flux_alignment[unit_index] : 0;
+}
+
+static int set_drive_flux_alignment(int val, void *param)
+{
+    unsigned int dnr = vice_ptr_to_uint(param);
+    if (!rotation_flux_alignment_valid(val)) {
+        return -1;
+    }
+    if (diskunit_context[dnr]->drives[0]->flux && val != flux_alignment[dnr]) {
+        log_error(LOG_DEFAULT, "Detach native SCP from unit %u before changing track alignment.", dnr + 8);
+        return -1;
+    }
+    flux_alignment[dnr] = val;
+    return 0;
+}
+
+int drive_flux_speed_mode(unsigned int unit_index)
+{
+    return unit_index < NUM_DISK_UNITS ? flux_speed_mode[unit_index] : 0;
+}
+
+static int set_drive_flux_speed(int val, void *param)
+{
+    unsigned int dnr = vice_ptr_to_uint(param);
+    drive_t *drive = diskunit_context[dnr]->drives[0];
+    if (val < 0 || val > 1) {
+        return -1;
+    }
+    if (drive->flux && val != flux_speed_mode[dnr]) {
+        log_error(LOG_DEFAULT, "Detach native SCP from unit %u before changing capture-speed policy.", dnr + 8);
+        return -1;
+    }
+    flux_speed_mode[dnr] = val;
+    return 0;
+}
+
 static int set_drive_wobble_frequency(int val, void *param)
 {
     unsigned int dnr;
@@ -400,6 +481,14 @@ static resource_int_t res_drive[] = {
       NULL, set_drive_wobble_amplitude, NULL },
     { NULL, 1, RES_EVENT_STRICT, NULL,
       NULL, set_drive_true_emulation, NULL },
+    { NULL, 0, RES_EVENT_SAME, NULL,
+      NULL, set_drive_flux_speed, NULL },
+    { NULL, 0, RES_EVENT_SAME, NULL,
+      NULL, set_drive_flux_alignment, NULL },
+    { NULL, 0, RES_EVENT_SAME, NULL,
+      NULL, set_drive_scp_flip, NULL },
+    { NULL, 0, RES_EVENT_SAME, NULL,
+      NULL, set_scp_blank_density, NULL },
     RESOURCE_INT_LIST_END
 };
 
@@ -449,6 +538,18 @@ int drive_resources_init(void)
         res_drive[5].name = lib_msprintf("Drive%iTrueEmulation", dnr + 8);
         res_drive[5].value_ptr = &(drive0->true_emulation);
         res_drive[5].param = vice_uint_to_ptr(dnr);
+        res_drive[6].name = lib_msprintf("Drive%iFluxSpeed", dnr + 8);
+        res_drive[6].value_ptr = &flux_speed_mode[dnr];
+        res_drive[6].param = vice_uint_to_ptr(dnr);
+        res_drive[7].name = lib_msprintf("Drive%iFluxAlignHalftrack", dnr + 8);
+        res_drive[7].value_ptr = &flux_alignment[dnr];
+        res_drive[7].param = vice_uint_to_ptr(dnr);
+        res_drive[8].name = lib_msprintf("Drive%iSCPFlip", dnr + 8);
+        res_drive[8].value_ptr = &scp_flip[dnr];
+        res_drive[8].param = vice_uint_to_ptr(dnr);
+        res_drive[9].name = lib_msprintf("Drive%iSCPBlankDensity", dnr + 8);
+        res_drive[9].value_ptr = &scp_blank_density[dnr];
+        res_drive[9].param = vice_uint_to_ptr(dnr);
 
         if (has_iec) {
             res_drive_rtc[0].name = lib_msprintf("Drive%iRTCSave", dnr + 8);
@@ -463,7 +564,7 @@ int drive_resources_init(void)
             return -1;
         }
 
-        for (i = 0; i <= 5; i++) {
+        for (i = 0; i <= 6; i++) {
             lib_free(res_drive[i].name);
         }
         if (has_iec) {

@@ -31,6 +31,7 @@
 #include "cia.h"
 #include "ciad.h"
 #include "drive.h"
+#include "diskimage.h"
 #include "drivetypes.h"
 #include "iec-cmdline-options.h"
 #include "iec-resources.h"
@@ -235,7 +236,9 @@ int iec_drive_snapshot_read(struct diskunit_context_s *ctxptr,
         break;
     case DRIVE_TYPE_2000:
     case DRIVE_TYPE_4000:
-        if (viacore_snapshot_read_module(ctxptr->via4000, s) < 0) {
+        if (viacore_snapshot_read_module(ctxptr->via4000, s) < 0
+            || (disk_image_flux_capture_get(ctxptr->drives[0]->image)
+                && pc8477_snapshot_read_module(ctxptr->pc8477, s) < 0)) {
             return -1;
         }
         break;
@@ -282,7 +285,9 @@ int iec_drive_snapshot_write(struct diskunit_context_s *ctxptr,
         break;
     case DRIVE_TYPE_2000:
     case DRIVE_TYPE_4000:
-        if (viacore_snapshot_write_module(ctxptr->via4000, s) < 0) {
+        if (viacore_snapshot_write_module(ctxptr->via4000, s) < 0
+            || (disk_image_flux_capture_get(ctxptr->drives[0]->image)
+                && pc8477_snapshot_write_module(ctxptr->pc8477, s) < 0)) {
             return -1;
         }
         break;

@@ -32,10 +32,15 @@
 #include "diskconstants.h"
 #include "diskimage.h"
 #include "drive.h"
+#include "drive-check.h"
 #include "driveimage.h"
 #include "drivetypes.h"
 #include "gcr.h"
+#include "diskimage/fsimage.h"
 #include "log.h"
+#include "lib.h"
+#include "rotation-flux.h"
+#include "rotation.h"
 #include "types.h"
 
 
@@ -47,6 +52,7 @@ int drive_image_type_to_drive_type(unsigned int type)
     switch (type) {
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D64:
             return DRIVE_TYPE_1541II;
         case DISK_IMAGE_TYPE_G71:
@@ -73,11 +79,55 @@ int drive_image_type_to_drive_type(unsigned int type)
     return DRIVE_TYPE_NONE;
 }
 
+int drive_check_scp_ieee(unsigned int type)
+{
+    return type == DRIVE_TYPE_2040 || type == DRIVE_TYPE_3040 || type == DRIVE_TYPE_4040
+        || type == DRIVE_TYPE_8050 || type == DRIVE_TYPE_8250 || type == DRIVE_TYPE_1001;
+}
+
+int drive_check_scp_write(unsigned int type, unsigned int flags)
+{
+    if (flags & FLUX_CAPTURE_DOUBLE_SIDED) {
+        return type == DRIVE_TYPE_1571 || type == DRIVE_TYPE_1571CR;
+    }
+    return type == DRIVE_TYPE_1540 || type == DRIVE_TYPE_1541 || type == DRIVE_TYPE_1541II
+        || type == DRIVE_TYPE_1551 || type == DRIVE_TYPE_1570 || type == DRIVE_TYPE_1571
+        || type == DRIVE_TYPE_1571CR || type == DRIVE_TYPE_2031;
+}
+
+int drive_check_scp_gcr(unsigned int type, unsigned int flags)
+{
+    int wide = type == DRIVE_TYPE_8050 || type == DRIVE_TYPE_8250 || type == DRIVE_TYPE_1001;
+    if (flags & FLUX_CAPTURE_MFM) {
+        return 0;
+    }
+    if (wide != !!(flags & FLUX_CAPTURE_8X50)) {
+        return 0;
+    }
+    return !(flags & FLUX_CAPTURE_DOUBLE_SIDED) || type == DRIVE_TYPE_8250
+        || type == DRIVE_TYPE_1001 || type == DRIVE_TYPE_1571 || type == DRIVE_TYPE_1571CR;
+}
+
+int drive_check_scp_mfm(unsigned int type, unsigned int flags)
+{
+    return (flags & FLUX_CAPTURE_MFM)
+        && (type == DRIVE_TYPE_4000
+            || (type == DRIVE_TYPE_2000 && !(flags & FLUX_CAPTURE_MFM_ED))
+            || (type == DRIVE_TYPE_1581 && !(flags & (FLUX_CAPTURE_MFM_HD | FLUX_CAPTURE_MFM_ED))));
+}
+
 int drive_check_image_format(unsigned int format, unsigned int dnr)
 {
     diskunit_context_t *unit = diskunit_context[dnr];
 
     switch (format) {
+        case DISK_IMAGE_TYPE_SCP:
+            return (unit->type == DRIVE_TYPE_1540 || unit->type == DRIVE_TYPE_1541
+                    || unit->type == DRIVE_TYPE_1541II || unit->type == DRIVE_TYPE_1551
+                    || unit->type == DRIVE_TYPE_2031 || unit->type == DRIVE_TYPE_1570
+                    || unit->type == DRIVE_TYPE_1571 || unit->type == DRIVE_TYPE_1571CR
+                    || unit->type == DRIVE_TYPE_1581 || unit->type == DRIVE_TYPE_2000
+                    || unit->type == DRIVE_TYPE_4000 || drive_check_scp_ieee(unit->type)) ? 0 : -1;
         case DISK_IMAGE_TYPE_D64:
         case DISK_IMAGE_TYPE_G64:
         case DISK_IMAGE_TYPE_P64:
@@ -170,8 +220,9 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
 {
     unsigned int dnr;
     drive_t *drive;
+    rotation_flux_t native_input = {0};
 
-    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS) {
+    if (unit < 8 || unit >= 8 + NUM_DISK_UNITS || drv >= NUM_DRIVES) {
         return -1;
     }
 
@@ -180,6 +231,54 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
 
     if (drive_check_image_format(image->type, dnr) < 0) {
         return -1;
+    }
+
+    if (image->type == DISK_IMAGE_TYPE_SCP) {
+        int head = drive->current_half_track;
+        /* Embedded media gets its alignment from the snapshot cursor. */
+        unsigned int alignment = image->media.fsimage->flux_only == FSIMAGE_FLUX_EMBEDDED
+            ? 0 : drive_flux_align_halftrack(dnr);
+        unsigned int side = drive_get_num_heads(drive->diskunit->type) == 2 ? drive->side : 0;
+        const flux_capture_t *capture = disk_image_flux_capture_get(image);
+        if (drive_check_scp_ieee(drive->diskunit->type)) {
+            if (!drive->true_emulation
+                || (drv && !drive_check_dual(drive->diskunit->type))
+                || !drive_check_scp_gcr(drive->diskunit->type, flux_capture_flags(capture))) {
+                return -1;
+            }
+            drive->image = image;
+            drive->read_only = image->read_only;
+            return 0;
+        }
+        if (flux_capture_flags(capture) & FLUX_CAPTURE_MFM) {
+            if (!drive_check_scp_mfm(drive->diskunit->type, flux_capture_flags(capture))
+                || drv != 0 || !drive->true_emulation) {
+                return -1;
+            }
+            drive->image = image;
+            drive->read_only = image->read_only;
+            return 0;
+        }
+        if (!drive_check_scp_gcr(drive->diskunit->type, flux_capture_flags(capture))
+            || drive_check_scp_mfm(drive->diskunit->type, FLUX_CAPTURE_MFM)) {
+            return -1;
+        }
+        if ((flux_capture_flags(capture) & FLUX_CAPTURE_DOUBLE_SIDED)
+            && (drive_get_num_heads(drive->diskunit->type) < 2 || alignment)) {
+            return -1;
+        }
+        if (head < 2) {
+            head = 2;
+        }
+        if (head > (int)FLUX_CAPTURE_TRACKS + 1) {
+            head = FLUX_CAPTURE_TRACKS + 1;
+        }
+        if (drv != 0 || !drive->true_emulation
+            || rotation_flux_bind(&native_input, disk_image_flux_capture_get(image),
+                                  rotation_flux_track(head, side, alignment)) != FLUX_OK) {
+            return -1;
+        }
+        native_input.align_halftrack = alignment;
     }
 
     drive->read_only = image->read_only;
@@ -199,6 +298,7 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
         case DISK_IMAGE_TYPE_X64:
 #endif
         case DISK_IMAGE_TYPE_P64:
+        case DISK_IMAGE_TYPE_SCP:
             disk_image_attach_log(image, driveimage_log, unit, drv);
             break;
         default:
@@ -212,6 +312,25 @@ int drive_image_attach(disk_image_t *image, unsigned int unit, unsigned int drv)
     if (disk_image_read_image(drive->image) < 0) {
         drive->image = NULL;
         return -1;
+    }
+    if (drive->image->type == DISK_IMAGE_TYPE_SCP) {
+        if (drive->flux == NULL) {
+            drive->flux = lib_malloc(sizeof(*drive->flux));
+        }
+        *drive->flux = native_input;
+        if (drive_flux_speed_mode(dnr) == 1) {
+            drive->flux->speed = 5;
+        }
+        /* An alignment override addresses a different physical track. */
+        drive->read_only = image->read_only = image->read_only || native_input.align_halftrack
+            || !drive_check_scp_write(drive->diskunit->type,
+                                      flux_capture_flags(native_input.playback.capture));
+        drive->GCR_image_loaded = drive->P64_image_loaded = 0;
+        drive->GCR_dirty_track = drive->P64_dirty = 0;
+        drive->complicated_image_loaded = 1;
+        rotation_flux_rebase(drive);
+        drive_set_half_track(drive->current_half_track, drive->side, drive);
+        return 0;
     }
     if (drive->image->type == DISK_IMAGE_TYPE_P64) {
         drive->P64_image_loaded = 1;
@@ -249,6 +368,7 @@ int drive_image_detach(disk_image_t *image, unsigned int unit, unsigned int drv)
             case DISK_IMAGE_TYPE_G64:
             case DISK_IMAGE_TYPE_G71:
             case DISK_IMAGE_TYPE_P64:
+            case DISK_IMAGE_TYPE_SCP:
 #ifdef HAVE_X64_IMAGE
             case DISK_IMAGE_TYPE_X64:
 #endif
@@ -259,6 +379,13 @@ int drive_image_detach(disk_image_t *image, unsigned int unit, unsigned int drv)
         }
     }
 
+    if (drive->flux != NULL) {
+        rotation_rotate_disk(drive);
+        rotation_flux_finish_write(drive);
+        rotation_flux_unbind(drive->flux);
+        lib_free(drive->flux);
+        drive->flux = NULL;
+    }
     if (drive->P64_image_loaded && drive->P64_dirty) {
         drive->P64_dirty = 0;
         if (disk_image_write_p64_image(drive->image) < 0) {

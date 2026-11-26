@@ -742,20 +742,21 @@ static UI_MENU_CALLBACK(create_disk_image_callback)
                 }
             }
             if (overwrite == 1) {
-                /* ask user for label,id of new disk */
-                format_name = sdl_ui_text_input_dialog(
-                        "Enter disk label,id:", NULL);
-                if (!format_name) {
-                    lib_free(name);
-                    return NULL;
+                if (new_disk_image_type == DISK_IMAGE_TYPE_SCP) {
+                    result = disk_image_fsimage_create(name, new_disk_image_type);
+                } else {
+                    format_name = sdl_ui_text_input_dialog("Enter disk label,id:", NULL);
+                    if (format_name == NULL) {
+                        goto done;
+                    }
+                    charset_petconvstring((uint8_t *)format_name, CONVERT_TO_PETSCII);
+                    result = vdrive_internal_create_format_disk_image(name, format_name,
+                                                                     new_disk_image_type);
+                    lib_free(format_name);
                 }
-                /* convert to PETSCII */
-                charset_petconvstring((uint8_t *)format_name, CONVERT_TO_PETSCII);
-
-                /* try to create the new image */
-                if (vdrive_internal_create_format_disk_image(name, format_name,
-                            new_disk_image_type) < 0) {
+                if (result < 0) {
                     ui_error("Cannot create disk image");
+                    goto done;
                 }
                 result = message_box("Attach new image", "Select unit",
                         MESSAGE_UNIT_SELECT);
@@ -766,11 +767,10 @@ static UI_MENU_CALLBACK(create_disk_image_callback)
                         ui_error("Cannot attach disk image.");
                     }
                 }
-
-                lib_free(format_name);
             }
-            lib_free(name);
         }
+done:
+        lib_free(name);
         ui_action_finish(ACTION_DRIVE_CREATE);
     }
     return NULL;
@@ -841,6 +841,11 @@ static const ui_menu_entry_t create_disk_image_type_menu[] = {
         .type     = MENU_ENTRY_RESOURCE_RADIO,
         .callback = set_disk_type_callback,
         .data     = (ui_callback_data_t)DISK_IMAGE_TYPE_P64
+    },
+    {   .string   = "SCP (unformatted)",
+        .type     = MENU_ENTRY_RESOURCE_RADIO,
+        .callback = set_disk_type_callback,
+        .data     = (ui_callback_data_t)DISK_IMAGE_TYPE_SCP
     },
 #ifdef HAVE_X64_IMAGE
     {   .string   = "X64",
@@ -1084,6 +1089,11 @@ UI_MENU_DEFINE_TOGGLE(AttachDevice9d1Readonly)
 UI_MENU_DEFINE_TOGGLE(AttachDevice10d1Readonly)
 UI_MENU_DEFINE_TOGGLE(AttachDevice11d1Readonly)
 
+UI_MENU_DEFINE_TOGGLE(Drive8SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive9SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive10SCPFlip)
+UI_MENU_DEFINE_TOGGLE(Drive11SCPFlip)
+
 UI_MENU_DEFINE_TOGGLE(Drive8TrueEmulation)
 UI_MENU_DEFINE_TOGGLE(Drive9TrueEmulation)
 UI_MENU_DEFINE_TOGGLE(Drive10TrueEmulation)
@@ -1098,6 +1108,15 @@ UI_MENU_DEFINE_STRING(Drive8FixedSize)
 UI_MENU_DEFINE_STRING(Drive9FixedSize)
 UI_MENU_DEFINE_STRING(Drive10FixedSize)
 UI_MENU_DEFINE_STRING(Drive11FixedSize)
+
+static UI_MENU_CALLBACK(scp_media_status_callback)
+{
+    disk_image_t *image = file_system_get_image(vice_ptr_to_int(param), 0);
+    if (!image || image->type != DISK_IMAGE_TYPE_SCP) {
+        return "Not attached";
+    }
+    return image->read_only ? "Read only" : "Writable";
+}
 
 /* CAUTION: the position of the menu items is hardcoded in uidrive_menu_create() */
 
@@ -1172,6 +1191,14 @@ UI_MENU_DEFINE_STRING(Drive11FixedSize)
 /* 19 */{   .string   = "Save Drive " #x" CMD RTC data",                        \
             .type     = MENU_ENTRY_RESOURCE_TOGGLE,                             \
             .callback = toggle_Drive##x##RTCSave_callback },                    \
+/* 20 */SDL_MENU_ITEM_SEPARATOR,                                                \
+/* 21 */{   .string   = "SCP media",                                            \
+            .type     = MENU_ENTRY_OTHER,                                       \
+            .callback = scp_media_status_callback,                              \
+            .data     = (ui_callback_data_t)(x) },                              \
+/* 22 */{   .string   = "Flip top-side SCP on next 1541 mount",                  \
+            .type     = MENU_ENTRY_RESOURCE_TOGGLE,                             \
+            .callback = toggle_Drive##x##SCPFlip_callback },                    \
         SDL_MENU_LIST_END                                                       \
     };
 

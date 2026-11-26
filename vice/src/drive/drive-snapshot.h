@@ -27,9 +27,19 @@
 #ifndef VICE_DRIVE_SNAPSHOT_H
 #define VICE_DRIVE_SNAPSHOT_H
 
+#include "types.h"
+
 struct snapshot_s;
+
+struct snapshot_s *drive_snapshot_open(const char *name, uint8_t *major, uint8_t *minor,
+                                      const char *machine_name);
 
 int drive_snapshot_write_module(struct snapshot_s *s, int save_disks, int save_roms);
 int drive_snapshot_read_module(struct snapshot_s *s);
+int drive_snapshot_read_with_machine_modules(struct snapshot_s *s,
+    int (*read_machine_modules)(struct snapshot_s *, int), int event_mode);
+
+int drive_snapshot_read_with_machine_busses(struct snapshot_s *s,
+    int (*read_machine_modules)(struct snapshot_s *, int), int event_mode, unsigned int available_busses);
 
 #endif

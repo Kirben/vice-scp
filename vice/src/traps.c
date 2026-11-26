@@ -35,6 +35,9 @@
 #include <stdlib.h>
 
 #include "cmdline.h"
+#include "attach.h"
+#include "diskimage.h"
+#include "drive.h"
 #include "lib.h"
 #include "log.h"
 #include "machine.h"
@@ -110,6 +113,16 @@ static int set_traps_enabled(int val, void *param)
     unsigned int i;
 
     DBG(("set_traps_enabled %d device: %u", val, unit));
+    if (val && unit >= 8 && unit <= 11) {
+        unsigned int drive;
+        for (drive = 0; drive < NUM_DRIVES; drive++) {
+            disk_image_t *image = file_system_get_image(unit, drive);
+            if (image && image->type == DISK_IMAGE_TYPE_SCP) {
+                log_error(traps_log, "Native SCP requires disabled device traps for unit %u.", unit);
+                return -1;
+            }
+        }
+    }
     traps_enabled_device[unit] = val ? 1 : 0;
 
     /* check all devices, enable traps if any of them is enabled */

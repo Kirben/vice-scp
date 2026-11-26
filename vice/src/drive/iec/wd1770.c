@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "diskimage.h"
+#include "../../diskimage/flux-capture.h"
 #include "drive.h"
 #include "drivetypes.h"
 #include "log.h"
@@ -548,16 +549,22 @@ static void wd1770_execute(wd1770_t *drv)
                             continue;
                         }
                         if (drv->byte_count <= (drv->dden ? 6 : (11 + 12)) + 2 + 9) {
-                            fdd_write(drv->fdd, 0);
+                            if (fdd_write(drv->fdd, 0) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             continue;
                         }
                         if (!drv->dden && drv->byte_count <= (11 + 12 + 2 + 9 + 3)) {
-                            fdd_write(drv->fdd, 0x1a1);
+                            if (fdd_write(drv->fdd, 0x1a1) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->crc = fdd_crc(drv->crc, 0xa1);
                             continue;
                         }
                         res = ((drv->cmd & WD_A) ? 0xf8 : 0xfb) | (drv->dden ? 0x100 : 0);
-                        fdd_write(drv->fdd, res);
+                        if (fdd_write(drv->fdd, res) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
+                        }
                         drv->crc = fdd_crc(drv->crc, res);
                         drv->byte_count = (128 << drv->tmp) + 3;
                         drv->step++;
@@ -569,20 +576,31 @@ static void wd1770_execute(wd1770_t *drv)
                         drv->clk += BYTE_RATE;
                         switch (--drv->byte_count) {
                             case 0:
-                                fdd_write(drv->fdd, 0xff);
+                                if (fdd_write(drv->fdd, 0xff) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 break;
                             case 1:
-                                fdd_write(drv->fdd, drv->crc & 0xff);
+                                if (fdd_write(drv->fdd, drv->crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 continue;
                             case 2:
-                                fdd_write(drv->fdd, drv->crc >> 8);
+                                if (fdd_write(drv->fdd, drv->crc >> 8) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 continue;
                             default:
                                 drv->status |= (drv->status & WD_DRQ) ? WD_LD : WD_DRQ;
                                 drv->crc = fdd_crc(drv->crc, drv->data);
-                                fdd_write(drv->fdd, drv->data);
+                                if (fdd_write(drv->fdd, drv->data) == FDD_SCP_WRITE_ERROR) {
+                                    goto scp_write_error;
+                                }
                                 drv->data = 0;
                                 continue;
+                        }
+                        if (fdd_finish_scp_write(drv->fdd) == FDD_SCP_WRITE_ERROR) {
+                            goto scp_write_error;
                         }
                         if (drv->cmd & WD_M) {
                             drv->sector++;
@@ -733,6 +751,9 @@ static void wd1770_execute(wd1770_t *drv)
                             return;
                         }
                         if (fdd_index_count(drv->fdd) > 1) {
+                            if (fdd_finish_scp_write(drv->fdd) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->status &= ~WD_DRQ;
                             drv->type = 0;
                             break;
@@ -743,7 +764,9 @@ static void wd1770_execute(wd1770_t *drv)
                         drv->clk += BYTE_RATE;
                         res = drv->data;
                         if (drv->byte_count) {
-                            fdd_write(drv->fdd, drv->crc & 0xff);
+                            if (fdd_write(drv->fdd, drv->crc & 0xff) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->byte_count--;
                         } else {
                             drv->status |= (drv->status & WD_DRQ) ? WD_LD : WD_DRQ;
@@ -790,7 +813,9 @@ static void wd1770_execute(wd1770_t *drv)
                             if (drv->tmp) {
                                 drv->crc = fdd_crc(drv->crc, res);
                             }
-                            fdd_write(drv->fdd, res);
+                            if (fdd_write(drv->fdd, res) == FDD_SCP_WRITE_ERROR) {
+                                goto scp_write_error;
+                            }
                             drv->data = 0;
                         }
                         continue;
@@ -814,6 +839,13 @@ static void wd1770_execute(wd1770_t *drv)
         drv->irq = 1;
         fdd_index_count_reset(drv->fdd);
     }
+
+scp_write_error:
+    drv->status = (drv->status & ~(WD_BSY | WD_DRQ)) | WD_WP;
+    drv->type = 0;
+    drv->cmd = 0;
+    drv->irq = 1;
+    fdd_index_count_reset(drv->fdd);
 }
 /*-----------------------------------------------------------------------*/
 /* WD1770 register read/write access.  */
@@ -948,7 +980,13 @@ int wd1770_attach_image(disk_image_t *image, unsigned int unit)
         return -1;
     }
 
+    if (image->type == DISK_IMAGE_TYPE_SCP
+        && (diskunit_context[unit - 8]->type != DRIVE_TYPE_1581
+            || !(flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_MFM))) {
+        return -1;
+    }
     switch (image->type) {
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D81:
         case DISK_IMAGE_TYPE_D1M:
             disk_image_attach_log(image, wd1770_log, unit, 0);
@@ -961,13 +999,29 @@ int wd1770_attach_image(disk_image_t *image, unsigned int unit)
     return 0;
 }
 
+int wd1770_scp_write_pending(const diskunit_context_t *drv)
+{
+    return fdd_scp_write_pending(drv->wd1770->fdd);
+}
+
+void wd1770_flush_scp(diskunit_context_t *drv)
+{
+    fdd_flush(drv->wd1770->fdd);
+}
+
 int wd1770_detach_image(disk_image_t *image, unsigned int unit)
 {
     if (image == NULL || unit < 8 || unit > 8 + NUM_DISK_UNITS) {
         return -1;
     }
 
+    if (image->type == DISK_IMAGE_TYPE_SCP
+        && (diskunit_context[unit - 8]->type != DRIVE_TYPE_1581
+            || !(flux_capture_flags(disk_image_flux_capture_get(image)) & FLUX_CAPTURE_MFM))) {
+        return -1;
+    }
     switch (image->type) {
+        case DISK_IMAGE_TYPE_SCP:
         case DISK_IMAGE_TYPE_D81:
         case DISK_IMAGE_TYPE_D1M:
             disk_image_detach_log(image, wd1770_log, unit, 0);
@@ -1053,7 +1107,7 @@ int wd1770_snapshot_write_module(wd1770_t *drv, struct snapshot_s *s)
     return fdd_snapshot_write_module(drv->fdd, s);
 }
 
-int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
+static int wd1770_snapshot_read_state(wd1770_t *drv, struct snapshot_s *s)
 {
     uint8_t vmajor, vminor;
     snapshot_module_t *m;
@@ -1099,5 +1153,20 @@ int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
         return -1;
     }
 
+    return 0;
+}
+
+int wd1770_snapshot_read_module(wd1770_t *drv, struct snapshot_s *s)
+{
+    if (wd1770_snapshot_read_state(drv, s) < 0) {
+        return -1;
+    }
     return fdd_snapshot_read_module(drv->fdd, s);
+}
+
+int wd1770_snapshot_validate_module(const wd1770_t *drv, struct snapshot_s *s)
+{
+    wd1770_t candidate = *drv;
+
+    return wd1770_snapshot_read_state(&candidate, s);
 }
