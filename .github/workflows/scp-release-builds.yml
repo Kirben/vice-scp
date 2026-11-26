@@ -116,9 +116,12 @@ jobs:
         with:
           msystem: ${{ matrix.arch.msystem }}
           update: true
+          # base-devel no longer pulls in flex and bison, which configure needs.
           install: >-
             autotools
             base-devel
+            bison
+            flex
             git
             p7zip
             subversion
@@ -331,9 +334,18 @@ jobs:
 
       - name: Homebrew Install Dependencies
         id: homebrew
+        timeout-minutes: 60
         run: |
-          brew list -1 | xargs brew uninstall --force
-          brew update
+          if [ "${{ matrix.silicon.name }}" = "Intel" ]; then
+            # Removing every preinstalled formula and updating Homebrew does
+            # not finish in reasonable time on the Intel image, so install
+            # onto the image as provided.
+            export HOMEBREW_NO_AUTO_UPDATE=1
+            export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+          else
+            brew list -1 | xargs brew uninstall --force
+            brew update
+          fi
           brew install ${{ env.SHARED_DEPS }} ${{ matrix.ui.deps }}
           echo "brew_prefix=$(brew --prefix)" >> $GITHUB_OUTPUT
 
