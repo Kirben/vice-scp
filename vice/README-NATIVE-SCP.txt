@@ -33,10 +33,11 @@ track 18.5. A mount using this alignment override is write protected.
 Writing and formatting
 ----------------------
 
-Use a writable working copy as an uncompressed SCP or a gzip-compressed SCP.
-Single-revolution images require writable MODE. For eligible multi-revolution images, set
--scpmultirevwrite before attaching. Explicit read-only mounts take
-precedence. c1541 provides a read-only sector view of compatible SCPs.
+Use a writable working copy as an uncompressed SCP or a gzip-compressed
+SCP. Single-revolution images can be written unless they are attached
+read-only. For eligible multi-revolution images, set -scpmultirevwrite
+before attaching. Explicit read-only mounts take precedence. c1541
+provides a read-only sector view of compatible SCPs.
 
 Create an SCP with Create and Attach Disk Image. Issue the emulated
 drive's format command with a disk ID, for example N0:DISK,42 on a
